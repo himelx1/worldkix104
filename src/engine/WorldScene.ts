@@ -43,7 +43,7 @@ export type InteractionTool =
   | { mode: 'rect_land' }
   | { mode: 'terraform'; action: 'to_land' | 'to_water' }
   | { mode: 'terrain_brush'; brush: TerrainBrushKind; radius: number; zoneType?: ZoneType }
-  | { mode: 'build'; defId: string; rotation?: 0 | 1 }
+  | { mode: 'build'; defId: string; rotation?: 0 | 1; targetLevel?: number; copiedFromBuildingId?: number }
   | { mode: 'move'; buildingId: number; rotation?: 0 | 1 }
   | { mode: 'road'; roadType: RoadType }
   | { mode: 'replant' }
@@ -291,6 +291,7 @@ export class WorldScene extends Phaser.Scene {
         gx: this.ghostCoord.gx,
         gy: this.ghostCoord.gy,
         rotation: rot,
+        targetLevel: this.tool.targetLevel,
       });
       if (res.ok) {
         this.audio.play('build');
@@ -981,7 +982,7 @@ export class WorldScene extends Phaser.Scene {
     if (this.tool.mode === 'build') {
       defId = this.tool.defId;
       rotation = this.tool.rotation ?? 0;
-      level = Math.max(1, this.engine.state.unlockedBuildingLevels?.[defId] ?? 1);
+      level = Math.max(1, this.tool.targetLevel ?? this.engine.state.unlockedBuildingLevels?.[defId] ?? 1);
     } else {
       const moveId = this.tool.buildingId;
       const b = this.engine.state.buildings.find((item) => item.id === moveId);
@@ -1007,7 +1008,8 @@ export class WorldScene extends Phaser.Scene {
             gy,
             this.engine.state,
             this.engine.chunks,
-            rotation
+            rotation,
+            this.tool.targetLevel
           )
         : this.engine.buildingSys.validateBuildingMove(
             this.tool.buildingId,
@@ -1656,6 +1658,7 @@ export class WorldScene extends Phaser.Scene {
         b.status === 'no_inputs' ||
         b.status === 'no_power' ||
         b.status === 'no_water' ||
+        b.status === 'storage_full' ||
         b.status === 'deposit_depleted';
 
       if (showMarker) {
@@ -1682,9 +1685,11 @@ export class WorldScene extends Phaser.Scene {
                   ? 'NO POWER'
                   : b.status === 'no_water'
                     ? 'NO WATER'
-                    : b.status === 'deposit_depleted'
-                      ? 'DEPLETED'
-                      : 'NO INPUT';
+                    : b.status === 'storage_full'
+                      ? 'STORAGE FULL'
+                      : b.status === 'deposit_depleted'
+                        ? 'DEPLETED'
+                        : 'NO INPUT';
         marker
           .setText(label)
           .setPosition(anchor.sx, anchor.sy - 20)

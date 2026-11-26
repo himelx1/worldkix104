@@ -17,10 +17,17 @@ import {
   RotateCw,
   Hand,
   Paintbrush,
+  ArrowUpCircle,
 } from 'lucide-react';
 import { ZONE_META, ZoneType } from '../../core/GameState';
 import { BUILDINGS, getBuildingFootprint } from '../../data/buildings.data';
+import { RESOURCES, ResourceId } from '../../data/resources.data';
 import type { TerrainBrushKind } from '../../engine/WorldScene';
+import {
+  BuildingCostCalculator,
+  clampBuildingLevel,
+  getEffectiveMaxLevel,
+} from '../../systems/BuildingSimulation';
 import { GameController, GameSnapshot } from '../bridge/GameController';
 
 interface BottomDockProps {
@@ -54,6 +61,32 @@ export const BottomDock: React.FC<BottomDockProps> = ({ snap }) => {
   const canRotateGhost = Boolean(
     ghostDef && ghostDef.width !== ghostDef.height && ghostDef.footprintRotatable !== false
   );
+  const ghostLevel =
+    isBuildGhost && ghostDef
+      ? clampBuildingLevel(
+          ghostDef,
+          tool.targetLevel ?? state.unlockedBuildingLevels?.[ghostDef.id] ?? 1
+        )
+      : isMoveGhost && movingBldg
+        ? movingBldg.level
+        : 1;
+  const ghostBuildCost =
+    isBuildGhost && ghostDef
+      ? BuildingCostCalculator.getCumulativeBuildCost(ghostDef, ghostLevel)
+      : null;
+
+  let readyUpgradeCount = 0;
+  for (const b of state.buildings) {
+    if (b.status === 'constructing') continue;
+    const def = BUILDINGS[b.defId];
+    if (!def) continue;
+    const maxLvl = getEffectiveMaxLevel(def);
+    if (b.level >= maxLvl) continue;
+    const stepCost = BuildingCostCalculator.getUpgradeStepCost(def, b.level);
+    if (BuildingCostCalculator.evaluateCost(stepCost, state).canAfford) {
+      readyUpgradeCount += 1;
+    }
+  }
 
   const isOtherToolBar =
     activeToolPanel === 'none' &&
@@ -504,8 +537,21 @@ export const BottomDock: React.FC<BottomDockProps> = ({ snap }) => {
         <div className="pointer-events-auto mx-auto w-full max-w-md min-w-0 bg-gradient-to-b from-[#152e22]/96 to-[#091710]/97 backdrop-blur-md border border-emerald-700/60 rounded-2xl px-3.5 py-2.5 flex flex-wrap items-center justify-between gap-2 shadow-[inset_0_1px_0_rgba(255,255,255,0.1),0_12px_30px_rgba(0,0,0,0.5)]">
           <div className="min-w-0 flex-1">
             <div className="text-xs font-bold text-stone-100 truncate">
-              {isMoveGhost ? 'Move' : 'Place'} {ghostDef.name} ({ghostFp.width}×{ghostFp.height})
+              {isMoveGhost
+                ? 'Move'
+                : isBuildGhost && tool.copiedFromBuildingId
+                  ? 'Copy'
+                  : 'Place'}{' '}
+              {ghostDef.name} · Lv.{ghostLevel} ({ghostFp.width}×{ghostFp.height})
             </div>
+            {ghostBuildCost ? (
+              <div className="text-[10px] text-amber-300/95 font-semibold tabular-nums truncate">
+                Cost: {ghostBuildCost.coinCost.toLocaleString()}C
+                {Object.entries(ghostBuildCost.materialCost)
+                  .map(([k, v]) => ` · ${v} ${RESOURCES[k as ResourceId]?.name ?? k}`)
+                  .join('')}
+              </div>
+            ) : null}
             <div className={`text-[11px] tabular-nums truncate ${ghostInfo && !ghostInfo.valid ? 'text-amber-300' : 'text-stone-300'}`}>
               {ghostInfo
                 ? ghostInfo.valid
@@ -630,13 +676,20 @@ export const BottomDock: React.FC<BottomDockProps> = ({ snap }) => {
         </div>
       )}
 
-      {/* Primary 5-Tab Sculpted Bottom Navigation Dock */}
-      <nav className="pointer-events-auto mx-auto w-full max-w-2xl bg-gradient-to-b from-[#142c20]/96 to-[#08150f]/97 backdrop-blur-md border border-emerald-700/50 rounded-2xl grid grid-cols-5 gap-1 p-1.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.1),0_10px_30px_rgba(0,0,0,0.55)]">
+      {/* Primary 6-Tab Sculpted Bottom Navigation Dock */}
+      <nav className="pointer-events-auto mx-auto w-full max-w-2xl bg-gradient-to-b from-[#142c20]/96 to-[#08150f]/97 backdrop-blur-md border border-emerald-700/50 rounded-2xl grid grid-cols-6 gap-1 p-1.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.1),0_10px_30px_rgba(0,0,0,0.55)]">
         <DockTab
           icon={<Hammer className="w-5 h-5" />}
           label="Build"
           active={activeSheet === 'build'}
           onClick={() => GameController.setActiveSheet('build')}
+        />
+        <DockTab
+          icon={<ArrowUpCircle className="w-5 h-5" />}
+          label="Level Up"
+          badge={readyUpgradeCount > 0 ? readyUpgradeCount : undefined}
+          active={activeSheet === 'levelup'}
+          onClick={() => GameController.setActiveSheet('levelup')}
         />
         <DockTab
           icon={<MapIcon className="w-5 h-5" />}
@@ -670,22 +723,32 @@ export const BottomDock: React.FC<BottomDockProps> = ({ snap }) => {
 interface DockTabProps {
   icon: React.ReactNode;
   label: string;
+  badge?: number;
   active: boolean;
   onClick: () => void;
 }
 
-const DockTab: React.FC<DockTabProps> = ({ icon, label, active, onClick }) => (
+const DockTab: React.FC<DockTabProps> = ({ icon, label, badge, active, onClick }) => (
   <button
     type="button"
     onClick={onClick}
-    className={`min-h-[50px] flex flex-col items-center justify-center rounded-xl transition-all ${
+    className={`relative min-h-[50px] flex flex-col items-center justify-center rounded-xl transition-all px-0.5 ${
       active
         ? 'bg-gradient-to-b from-amber-400 to-amber-500 text-stone-950 font-bold shadow-[inset_0_1px_0_rgba(255,255,255,0.45),0_2px_0_#92400e]'
         : 'text-stone-200 hover:text-white hover:bg-[#163124]/80 border border-transparent hover:border-emerald-800/40'
     }`}
   >
     {icon}
-    <span className="text-[11px] font-semibold mt-0.5 whitespace-nowrap">{label}</span>
+    {badge ? (
+      <span
+        className={`absolute top-1 right-1.5 min-w-[16px] h-4 px-1 rounded-md text-[9px] font-extrabold tabular-nums flex items-center justify-center ${
+          active ? 'bg-stone-950 text-amber-300' : 'bg-emerald-500 text-stone-950'
+        }`}
+      >
+        {badge > 99 ? '99+' : badge}
+      </span>
+    ) : null}
+    <span className="text-[10px] sm:text-[11px] font-semibold mt-0.5 whitespace-nowrap">{label}</span>
   </button>
 );
 

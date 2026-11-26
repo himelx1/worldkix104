@@ -7,6 +7,13 @@ import {
   WorldEngineState,
 } from '../core/GameState';
 import { localTileIndex } from '../core/IsoMath';
+import {
+  getPlantationLevelSpec,
+  getPlantationTheoreticalHourlyWood,
+  PLANTATION_LEVEL_SPECS,
+  PLANTATION_TOTAL_SLOTS,
+  type PlantationLevelSpec,
+} from './BuildingSimulation';
 import { DistrictServiceSystem } from './DistrictServiceSystem';
 import type { ClimateModifiers } from './EnvironmentSystem';
 import { ProductionSystem } from './ProductionSystem';
@@ -15,71 +22,9 @@ import type { RoadNetworkSystem } from './RoadNetworkSystem';
 import type { TechModifiers } from './TechSystem';
 import type { WorkforceSystem } from './WorkforceSystem';
 
-export interface PlantationLevelConfig {
-  level: number;
-  maxTrees: number;
-  plantBatch: number;
-  harvestBatch: number;
-  growSeconds: number;
-  woodPerTree: number;
-  efficiency: number;
-  label: string;
-}
-
-export const PLANTATION_TOTAL_SLOTS = 800; // 20x50 (1000) minus 10x20 main factory building (200)
-
-export const PLANTATION_LEVELS: ReadonlyArray<PlantationLevelConfig> = [
-  {
-    level: 1,
-    maxTrees: 160,
-    plantBatch: 8,
-    harvestBatch: 8,
-    growSeconds: 40,
-    woodPerTree: 1.5,
-    efficiency: 1.0,
-    label: 'Base plantation & automated timber line',
-  },
-  {
-    level: 2,
-    maxTrees: 300,
-    plantBatch: 14,
-    harvestBatch: 14,
-    growSeconds: 32,
-    woodPerTree: 1.8,
-    efficiency: 1.15,
-    label: 'Expanded nursery & faster seedling growth',
-  },
-  {
-    level: 3,
-    maxTrees: 460,
-    plantBatch: 22,
-    harvestBatch: 22,
-    growSeconds: 26,
-    woodPerTree: 2.1,
-    efficiency: 1.35,
-    label: 'Automated gantry harvesters & drip irrigation',
-  },
-  {
-    level: 4,
-    maxTrees: 640,
-    plantBatch: 32,
-    harvestBatch: 32,
-    growSeconds: 21,
-    woodPerTree: 2.5,
-    efficiency: 1.6,
-    label: 'High-density silviculture & rapid replant drones',
-  },
-  {
-    level: 5,
-    maxTrees: 800,
-    plantBatch: 48,
-    harvestBatch: 48,
-    growSeconds: 16,
-    woodPerTree: 3.0,
-    efficiency: 1.9,
-    label: 'Full-capacity 800-plot industrial forestry complex',
-  },
-];
+export type PlantationLevelConfig = PlantationLevelSpec;
+export { PLANTATION_TOTAL_SLOTS };
+export const PLANTATION_LEVELS: ReadonlyArray<PlantationLevelConfig> = PLANTATION_LEVEL_SPECS;
 
 export interface PlantationGeometry {
   totalWidth: number;
@@ -91,8 +36,7 @@ export interface PlantationGeometry {
 
 export class TreePlantationSystem {
   public static getLevelConfig(level: number): PlantationLevelConfig {
-    const idx = Math.max(0, Math.min(PLANTATION_LEVELS.length - 1, Math.floor(level) - 1));
-    return PLANTATION_LEVELS[idx];
+    return getPlantationLevelSpec(level);
   }
 
   /**
@@ -100,9 +44,7 @@ export class TreePlantationSystem {
    * directly derived from maxTrees, growSeconds, woodPerTree, and efficiency.
    */
   public static getTheoreticalHourlyWood(level: number): number {
-    const cfg = this.getLevelConfig(level);
-    const woodPerRealSec = (cfg.maxTrees / cfg.growSeconds) * cfg.woodPerTree * cfg.efficiency;
-    return Number((woodPerRealSec * 12.5).toFixed(1));
+    return getPlantationTheoreticalHourlyWood(level);
   }
 
   public static getGeometry(rotation: 0 | 1 = 0): PlantationGeometry {

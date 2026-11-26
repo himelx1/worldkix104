@@ -14,7 +14,10 @@ export function getCorporateLevelTitle(level: number): string {
 }
 
 function mkBldg(def: BuildingDef): BuildingDef {
-  return def;
+  return {
+    ...def,
+    maxLevel: def.category === 'storage' ? 4 : 5,
+  };
 }
 
 function govBldg(
@@ -1027,7 +1030,7 @@ export const EXPANSION_BUILDINGS: Record<string, BuildingDef> = {
     'Fish Cold Storage Complex',
     5,
     5,
-    '5×5 industrial freezer warehouse adding +600 Granary food capacity.',
+    '5×5 industrial freezer facility expanding city Crop & Material storage capacity.',
     { inputs: {}, outputs: {}, cycleSeconds: 60, xpPerCycle: 10 },
     { unlockLevel: 5, category: 'storage', granaryBonus: 600, warehouseBonus: 200, pollutionDelta: 1, allowedZones: ['fishing', 'port', 'logistics', 'sez'], roofColor: '#38bdf8' }
   ),
@@ -1246,7 +1249,7 @@ export const EXPANSION_BUILDINGS: Record<string, BuildingDef> = {
   irrigation_station: farmBldg('irrigation_station', 'Irrigation Station', 'Pumps river water across nearby farms (+150 Water supply).', undefined, {
     unlockLevel: 3, coinCost: 300, waterOutput: 150, waterDemand: 0, width: 2, height: 1,
   }),
-  grain_silo: farmBldg('grain_silo', 'Agricultural Grain Silo', 'Adds +450 Granary capacity for crops and harvest stock.', undefined, {
+  grain_silo: farmBldg('grain_silo', 'Agricultural Grain Silo', 'Bulk agricultural grain silo expanding city Crop Storage reserves.', undefined, {
     unlockLevel: 2, category: 'storage', coinCost: 260, granaryBonus: 450, waterDemand: 0, width: 2, height: 1,
   }),
   farm_equipment_depot: farmBldg('farm_equipment_depot', 'Farm Equipment Depot', 'Dispatches tractors & harvesters, boosting farm logistics.', undefined, {
@@ -1275,7 +1278,7 @@ export const EXPANSION_BUILDINGS: Record<string, BuildingDef> = {
   deep_sea_fishing_harbor: fishBldg('deep_sea_fishing_harbor', 'Deep Sea Fishing Harbor', 'Oceanic fleet harbor landing massive commercial Fish harvests.', {
     inputs: {}, outputs: { fish: 56 }, cycleSeconds: 20, xpPerCycle: 26,
   }, { unlockLevel: 7, coinCost: 890, width: 3, height: 3 }),
-  seafood_cold_storage: fishBldg('seafood_cold_storage', 'Seafood Cold Storage', 'Harbor chiller warehouse adding +350 Granary food capacity.', undefined, {
+  seafood_cold_storage: fishBldg('seafood_cold_storage', 'Seafood Cold Storage', 'Harbor chiller facility expanding city Crop & Food storage capacity.', undefined, {
     unlockLevel: 4, category: 'storage', coinCost: 360, granaryBonus: 350, requiresCoast: false,
   }),
 

@@ -14,6 +14,7 @@ import {
   Check,
   Clock,
   Globe,
+  ArrowUpCircle,
 } from 'lucide-react';
 import { formatCompactNumber } from '../../core/Formatters';
 import { OfflineManager } from '../../persistence/OfflineManager';
@@ -113,6 +114,18 @@ const PauseContent: React.FC<{ snap: GameSnapshot }> = ({ snap }) => {
           className="w-full min-h-[48px] rounded-xl bg-gradient-to-b from-amber-400 to-amber-500 text-stone-950 font-bold text-sm shadow-[inset_0_1px_0_rgba(255,255,255,0.45),0_3px_0_#92400e] active:translate-y-[2px]"
         >
           Resume Game
+        </button>
+
+        <button
+          type="button"
+          onClick={() => {
+            GameController.setActiveModal('none');
+            GameController.setActiveSheet('levelup');
+          }}
+          className="w-full min-h-[48px] px-4 rounded-xl bg-[#0b1f15] border border-emerald-500/55 hover:border-emerald-400/70 text-stone-100 text-sm font-semibold flex items-center gap-3"
+        >
+          <ArrowUpCircle className="w-4 h-4 text-emerald-300" />
+          Building Level Up
         </button>
 
         <button

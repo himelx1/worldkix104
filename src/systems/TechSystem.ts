@@ -1,7 +1,7 @@
 import { BUILDINGS } from '../data/buildings.data';
 import { TECH_MAP, TECH_TREE, TechDef } from '../data/techTree.data';
 import type { WorldEngineState } from '../core/GameState';
-import { ResourceSystem } from './ResourceSystem';
+import { getBuildingStatsAtLevel } from './BuildingSimulation';
 
 export interface TechModifiers {
   chopDamageMult: number;
@@ -84,11 +84,11 @@ export class TechSystem {
       const def = BUILDINGS[b.defId];
       if (!def?.rpPerMin) continue;
 
-      const workerScale = def.maxWorkers > 0 ? b.assignedWorkers / def.maxWorkers : 1;
-      const levelScale = 1 + (b.level - 1) * 0.35;
+      const stats = getBuildingStatsAtLevel(def, b.level);
+      const workerScale = stats.maxWorkers > 0 ? Math.min(1, b.assignedWorkers / stats.maxWorkers) : 1;
       let paperOk = true;
-      if (def.rpPaperCostPerMin && def.rpPaperCostPerMin > 0 && state.tick % 20 === 0) {
-        const paperNeed = Math.max(1, Math.round(def.rpPaperCostPerMin / 3));
+      if (stats.rpPaperCostPerMin > 0 && state.tick % 20 === 0) {
+        const paperNeed = Math.max(1, Math.round(stats.rpPaperCostPerMin / 3));
         if (state.resources.paper >= paperNeed) {
           state.resources.paper -= paperNeed;
         } else {
@@ -97,7 +97,7 @@ export class TechSystem {
       }
 
       const efficiency = paperOk ? 1.0 : 0.45;
-      rpPerSec += (def.rpPerMin / 60) * workerScale * levelScale * efficiency * mods.researchSpeedMult;
+      rpPerSec += (stats.rpPerMin / 60) * workerScale * efficiency * mods.researchSpeedMult;
     }
 
     if (state.activePolicies?.includes('scholar_grants')) {

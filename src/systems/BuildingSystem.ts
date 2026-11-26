@@ -4,20 +4,32 @@ import {
   BuildingDef,
   BUILDINGS,
   getBuildingFootprint,
-  getBuildingLevelMultiplier,
 } from '../data/buildings.data';
-import { getRecipeHourlyAmount } from '../core/Formatters';
 import type { ZoneType } from '../core/GameState';
 import { getBuildQueueCap } from '../data/levels.data';
 import { RESOURCES, ResourceId } from '../data/resources.data';
 import { ROADS, RoadType } from '../data/roads.data';
 import { TECH_MAP } from '../data/techTree.data';
-import { DEPOSIT_NAMES, DepositType, FeatureType, TREE_SPECIES } from '../data/trees.data';
+import {
+  DEPOSIT_NAMES,
+  DepositType,
+  FeatureType,
+  isMatureTreeFeature,
+  TREE_SPECIES,
+} from '../data/trees.data';
 import type { ChunkManager } from '../core/ChunkManager';
 import { BuildingInstance, RoadDirection, WorldEngineState, ZONE_ID_TO_TYPE } from '../core/GameState';
 import { CHUNK_SIZE, gridToChunk } from '../core/IsoMath';
+import {
+  BuildingCostCalculator,
+  BuildingLevelStats,
+  clampBuildingLevel,
+  getBuildingStatsAtLevel as simGetBuildingStatsAtLevel,
+  getEffectiveMaxLevel,
+} from './BuildingSimulation';
 import { ResourceSystem } from './ResourceSystem';
 import type { RoadNetworkSystem } from './RoadNetworkSystem';
+import { TreeGrowthSystem } from './TreeGrowthSystem';
 import { TreePlantationSystem } from './TreePlantationSystem';
 
 export interface MaterialShortage {
@@ -131,7 +143,8 @@ export class BuildingSystem {
 
   public static getGlobalBuildRequirements(
     defId: string,
-    state: WorldEngineState
+    state: WorldEngineState,
+    targetLevelOverride?: number
   ): GlobalBuildRequirements {
     const def = BUILDINGS[defId];
     if (!def) {
@@ -164,26 +177,20 @@ export class BuildingSystem {
     const queueCap = getBuildQueueCap(state.level);
     const queueFull = queueActive >= queueCap;
 
-    const coinsHave = Math.floor(state.coins);
-    const coinsNeed = def.coinCost;
-    const missingCoins = Math.max(0, coinsNeed - coinsHave);
-
-    const materials: MaterialShortage[] = [];
-    for (const [k, rawNeed] of Object.entries(def.materialCost)) {
-      const need = rawNeed ?? 0;
-      if (need <= 0) continue;
-      const rid = k as ResourceId;
-      const have = Math.floor(state.resources[rid] ?? 0);
-      materials.push({
-        resourceId: rid,
-        name: RESOURCES[rid]?.name ?? rid,
-        have,
-        need,
-        missing: Math.max(0, need - have),
-        producers: this.getResourceProducers(rid),
-      });
-    }
-    const missingMaterials = materials.filter((m) => m.missing > 0);
+    const resolvedLevel = clampBuildingLevel(
+      def,
+      targetLevelOverride ?? state.unlockedBuildingLevels?.[defId] ?? 1
+    );
+    const evaluated = BuildingCostCalculator.evaluateCost(
+      BuildingCostCalculator.getCumulativeBuildCost(def, resolvedLevel),
+      state,
+      (rid) => this.getResourceProducers(rid)
+    );
+    const coinsHave = evaluated.coinsHave;
+    const coinsNeed = evaluated.coinCost;
+    const missingCoins = evaluated.missingCoins;
+    const materials = evaluated.materials;
+    const missingMaterials = evaluated.missingMaterials;
     const requiredDepositName = def.requiredDeposit
       ? DEPOSIT_NAMES[def.requiredDeposit]
       : undefined;
@@ -247,96 +254,37 @@ export class BuildingSystem {
     if (!def) {
       return { coinCost: 0, missingCoins: 0, materials: [], missingMaterials: [], canAfford: false };
     }
-    const mult = 0.75 * Math.pow(1.6, b.level - 1);
-    const coinCost = Math.round(def.coinCost * mult);
-    const missingCoins = Math.max(0, coinCost - Math.floor(state.coins));
-    const materials: MaterialShortage[] = [];
-    for (const [k, v] of Object.entries(def.materialCost)) {
-      if (!v) continue;
-      const need = Math.max(1, Math.round(v * mult));
-      const rid = k as ResourceId;
-      const have = Math.floor(state.resources[rid] ?? 0);
-      materials.push({
-        resourceId: rid,
-        name: RESOURCES[rid]?.name ?? rid,
-        have,
-        need,
-        missing: Math.max(0, need - have),
-        producers: this.getResourceProducers(rid),
-      });
-    }
-    const missingMaterials = materials.filter((m) => m.missing > 0);
+    const evaluated = BuildingCostCalculator.evaluateCost(
+      BuildingCostCalculator.getUpgradeStepCost(def, b.level),
+      state,
+      (rid) => this.getResourceProducers(rid)
+    );
     return {
-      coinCost,
-      missingCoins,
-      materials,
-      missingMaterials,
-      canAfford: missingCoins === 0 && missingMaterials.length === 0,
+      coinCost: evaluated.coinCost,
+      missingCoins: evaluated.missingCoins,
+      materials: evaluated.materials,
+      missingMaterials: evaluated.missingMaterials,
+      canAfford: evaluated.canAfford,
     };
   }
 
-  public static getBuildingStatsAtLevel(
-    def: BuildingDef,
-    level: number
-  ): {
-    hourlyOutputs: Array<{ resourceId: ResourceId; name: string; perHour: number }>;
-    totalHourlyOutput: number;
-    housingCapacity: number;
-    granaryBonus: number;
-    warehouseBonus: number;
-    powerOutput: number;
-    powerDemand: number;
-    waterOutput: number;
-    waterDemand: number;
-    maxWorkers: number;
-    taxPerMin: number;
-    tradeCapacity: number;
-  } {
-    const mult = getBuildingLevelMultiplier(level, def);
-    const hourlyOutputs: Array<{ resourceId: ResourceId; name: string; perHour: number }> = [];
-    let totalHourlyOutput = 0;
-    if (def.isAutomatedTreePlantation) {
-      const perHour = TreePlantationSystem.getTheoreticalHourlyWood(level);
-      hourlyOutputs.push({ resourceId: 'wood', name: RESOURCES.wood.name, perHour });
-      totalHourlyOutput += perHour;
-    } else if (def.recipe) {
-      for (const [k, v] of Object.entries(def.recipe.outputs)) {
-        if (!v) continue;
-        const rid = k as ResourceId;
-        const perHour = getRecipeHourlyAmount(v, def.recipe.cycleSeconds, mult);
-        hourlyOutputs.push({ resourceId: rid, name: RESOURCES[rid]?.name ?? rid, perHour });
-        totalHourlyOutput += perHour;
-      }
-    }
-    const extraWorkers = level > 1 && def.maxWorkers >= 2 ? level - 1 : 0;
-    return {
-      hourlyOutputs,
-      totalHourlyOutput,
-      housingCapacity: def.housingCapacity ? Math.round(def.housingCapacity * mult) : 0,
-      granaryBonus: def.granaryBonus ? Math.round(def.granaryBonus * mult) : 0,
-      warehouseBonus: def.warehouseBonus ? Math.round(def.warehouseBonus * mult) : 0,
-      powerOutput: def.powerOutput ? Math.round(def.powerOutput * mult) : 0,
-      powerDemand: def.powerDemand ? Math.round(def.powerDemand * (1 + (level - 1) * 0.25)) : 0,
-      waterOutput: def.waterOutput ? Math.round(def.waterOutput * mult) : 0,
-      waterDemand: def.waterDemand ? Math.round(def.waterDemand * (1 + (level - 1) * 0.25)) : 0,
-      maxWorkers: def.maxWorkers > 0 ? def.maxWorkers + extraWorkers : 0,
-      taxPerMin: def.taxPerMin ? Math.round(def.taxPerMin * mult) : 0,
-      tradeCapacity: def.tradeCapacity ? Math.round(def.tradeCapacity * mult) : 0,
-    };
+  public static getBuildingStatsAtLevel(def: BuildingDef, level: number): BuildingLevelStats {
+    return simGetBuildingStatsAtLevel(def, level);
   }
 
   public static getBuildingUpgradePreview(
     b: BuildingInstance,
     state: WorldEngineState
   ): {
-    cur: ReturnType<typeof BuildingSystem.getBuildingStatsAtLevel>;
-    next: ReturnType<typeof BuildingSystem.getBuildingStatsAtLevel> | null;
+    cur: BuildingLevelStats;
+    next: BuildingLevelStats | null;
     cost: ReturnType<typeof BuildingSystem.getUpgradeCostAndMissing>;
   } | null {
     const def = BUILDINGS[b.defId];
     if (!def) return null;
+    const maxLvl = getEffectiveMaxLevel(def);
     const cur = this.getBuildingStatsAtLevel(def, b.level);
-    const next = b.level < def.maxLevel ? this.getBuildingStatsAtLevel(def, b.level + 1) : null;
+    const next = b.level < maxLvl ? this.getBuildingStatsAtLevel(def, b.level + 1) : null;
     const cost = this.getUpgradeCostAndMissing(b, state);
     return { cur, next, cost };
   }
@@ -347,7 +295,8 @@ export class BuildingSystem {
     gy: number,
     state: WorldEngineState,
     chunks: ChunkManager,
-    rotation: 0 | 1 = 0
+    rotation: 0 | 1 = 0,
+    targetLevelOverride?: number
   ): PlacementValidation {
     const def = BUILDINGS[defId];
     if (!def) return { valid: false, reason: 'Unknown building' };
@@ -362,7 +311,7 @@ export class BuildingSystem {
       }
     }
 
-    const req = BuildingSystem.getGlobalBuildRequirements(defId, state);
+    const req = BuildingSystem.getGlobalBuildRequirements(defId, state, targetLevelOverride);
     if (!req.levelOk) {
       return { valid: false, reason: `Requires City Level ${def.unlockLevel} (currently Lv.${state.level})` };
     }
@@ -511,21 +460,40 @@ export class BuildingSystem {
     state: WorldEngineState,
     chunks: ChunkManager,
     roadNet: RoadNetworkSystem,
-    rotation: 0 | 1 = 0
+    rotation: 0 | 1 = 0,
+    targetLevelOverride?: number
   ): { ok: boolean; reason?: string; building?: BuildingInstance } {
-    const check = this.validateBuildingPlacement(defId, gx, gy, state, chunks, rotation);
+    const check = this.validateBuildingPlacement(
+      defId,
+      gx,
+      gy,
+      state,
+      chunks,
+      rotation,
+      targetLevelOverride
+    );
     if (!check.valid) return { ok: false, reason: check.reason };
 
     const def = BUILDINGS[defId];
-    if (!ResourceSystem.consume(state, def.coinCost, def.materialCost)) {
-      const req = BuildingSystem.getGlobalBuildRequirements(defId, state);
+    const resolvedLevel = clampBuildingLevel(
+      def,
+      targetLevelOverride ?? state.unlockedBuildingLevels?.[defId] ?? 1
+    );
+    const buildCost = BuildingCostCalculator.getCumulativeBuildCost(def, resolvedLevel);
+
+    if (!ResourceSystem.consume(state, buildCost.coinCost, buildCost.materialCost)) {
+      const req = BuildingSystem.getGlobalBuildRequirements(defId, state, resolvedLevel);
       return { ok: false, reason: req.summaryReason ?? 'Insufficient Coins or materials' };
     }
 
     const fp = getBuildingFootprint(def, rotation);
-    const blueprintLevel = Math.min(def.maxLevel, Math.max(1, state.unlockedBuildingLevels?.[defId] ?? 1));
     const ownerCityId = chunks.getTileCityId(gx, gy) || state.activeCityId || 1;
-    const id = state.nextBuildingId++;
+    let id = Math.max(1, Math.floor(state.nextBuildingId || 1));
+    while (state.buildings.some((existing) => existing.id === id)) {
+      id += 1;
+    }
+    state.nextBuildingId = id + 1;
+
     const building: BuildingInstance = {
       id,
       defId,
@@ -533,7 +501,7 @@ export class BuildingSystem {
       gy,
       rotation,
       cityId: ownerCityId,
-      level: blueprintLevel,
+      level: resolvedLevel,
       status: 'constructing',
       buildProgress: 0,
       prodProgress: 0,
@@ -553,6 +521,7 @@ export class BuildingSystem {
     }
 
     state.buildings.push(building);
+    TreeGrowthSystem.removeFootprint(state, gx, gy, fp.width, fp.height);
     roadNet.evaluateBuildingRoadAccess(building, chunks);
     return { ok: true, building };
   }
@@ -685,7 +654,8 @@ export class BuildingSystem {
     if (b.status === 'constructing') return { ok: false, reason: 'Wait for construction to finish', xpGained: 0 };
     const def = BUILDINGS[b.defId];
     if (!def) return { ok: false, reason: 'Invalid definition', xpGained: 0 };
-    if (b.level >= def.maxLevel) return { ok: false, reason: 'Already max level', xpGained: 0 };
+    const maxLvl = getEffectiveMaxLevel(def);
+    if (b.level >= maxLvl) return { ok: false, reason: 'Already max level', xpGained: 0 };
 
     const upg = BuildingSystem.getUpgradeCostAndMissing(b, state);
     if (!upg.canAfford) {
@@ -706,7 +676,10 @@ export class BuildingSystem {
 
     b.level += 1;
     state.unlockedBuildingLevels ??= {};
-    state.unlockedBuildingLevels[b.defId] = Math.max(state.unlockedBuildingLevels[b.defId] ?? 1, b.level);
+    state.unlockedBuildingLevels[b.defId] = Math.min(
+      maxLvl,
+      Math.max(state.unlockedBuildingLevels[b.defId] ?? 1, b.level)
+    );
     ResourceSystem.recalculateCapacities(state);
     return { ok: true, xpGained: 40 * b.level };
   }
@@ -913,8 +886,8 @@ export class BuildingSystem {
           }
         }
       }
-      // 40% coin refund
-      state.coins += Math.round(def.coinCost * 0.4);
+      // 40% refund of invested construction & upgrade coin cost
+      state.coins += BuildingCostCalculator.getDemolishRefundCoins(def, b.level);
     }
 
     state.buildings.splice(idx, 1);
@@ -1215,7 +1188,8 @@ export class BuildingSystem {
     gy: number,
     damage: number,
     chunks: ChunkManager,
-    state: WorldEngineState
+    state: WorldEngineState,
+    opts?: { allowImmature?: boolean }
   ): { hit: boolean; cleared: boolean; woodGained: number; bonusName?: string; bonusAmount?: number; coinsGained: number; xpGained: number } {
     if (!chunks.isUnlocked(gx, gy)) {
       return { hit: false, cleared: false, woodGained: 0, coinsGained: 0, xpGained: 0 };
@@ -1224,6 +1198,13 @@ export class BuildingSystem {
     const chunk = chunks.getOrCreateChunk(cx, cy);
     const ft = chunk.featureType[index] as FeatureType;
     if (ft === FeatureType.None) {
+      return { hit: false, cleared: false, woodGained: 0, coinsGained: 0, xpGained: 0 };
+    }
+    if (
+      opts?.allowImmature === false &&
+      (ft === FeatureType.Sapling || ft === FeatureType.MediumTree) &&
+      !isMatureTreeFeature(ft)
+    ) {
       return { hit: false, cleared: false, woodGained: 0, coinsGained: 0, xpGained: 0 };
     }
     const species = TREE_SPECIES[ft];
@@ -1238,6 +1219,7 @@ export class BuildingSystem {
     }
     chunk.featureType[index] = FeatureType.None;
     chunk.featureHp[index] = 0;
+    TreeGrowthSystem.removeAt(state, gx, gy);
 
     let woodGained = 0;
     const timberBoost = state.activePolicies?.includes('timber_stewards') ? 1.35 : 1.0;
@@ -1296,15 +1278,24 @@ export class BuildingSystem {
     return { ok: true, coins, rp, stone, wood, xp: 45 };
   }
 
-  public static replantTile(gx: number, gy: number, chunks: ChunkManager): boolean {
+  public static replantTile(
+    gx: number,
+    gy: number,
+    chunks: ChunkManager,
+    state?: WorldEngineState
+  ): boolean {
     if (!chunks.isUnlocked(gx, gy)) return false;
     const { cx, cy, index } = gridToChunk(gx, gy);
     const chunk = chunks.getOrCreateChunk(cx, cy);
+    if (chunks.isWaterBiome(chunk.biomeId[index])) return false;
     if (chunk.featureType[index] !== FeatureType.None) return false;
     if (chunk.buildingRef[index] !== -1 || chunk.roadType[index] !== 0) return false;
     chunk.featureType[index] = FeatureType.Sapling;
-    chunk.featureHp[index] = 15;
+    chunk.featureHp[index] = TREE_SPECIES[FeatureType.Sapling]?.maxHp ?? 15;
     chunks.markChunkModified(cx, cy);
+    if (state) {
+      TreeGrowthSystem.registerSapling(state, chunks, gx, gy);
+    }
     return true;
   }
 }

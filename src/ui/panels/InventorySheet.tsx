@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { RESOURCE_LIST, ResourceCategory } from '../../data/resources.data';
+import { getStorageSystemSummary } from '../../systems/BuildingSimulation';
 import type { GameSnapshot } from '../bridge/GameController';
 import { SheetContainer } from './SheetContainer';
 
@@ -8,6 +9,7 @@ export const InventorySheet: React.FC<{ snap: GameSnapshot }> = ({ snap }) => {
   const [query, setQuery] = useState('');
   const { state } = snap;
   const q = query.trim().toLowerCase();
+  const storageSummary = getStorageSystemSummary(state);
 
   const list = RESOURCE_LIST.filter(
     (r) =>
@@ -15,11 +17,58 @@ export const InventorySheet: React.FC<{ snap: GameSnapshot }> = ({ snap }) => {
       (!q || r.name.toLowerCase().includes(q) || r.shortCode.toLowerCase().includes(q))
   );
 
+  const totalOverflowCount =
+    storageSummary.crop.overflowItems.length + storageSummary.material.overflowItems.length;
+
   return (
     <SheetContainer
-      title="Resource Inventory"
-      subtitle="Build Granaries (+Food cap) and Warehouses (+Material cap) to store more"
+      title="Resource Inventory & Storage"
+      subtitle={`Crop Cap: ${storageSummary.crop.capacityPerItem}/crop · Material Cap: ${storageSummary.material.capacityPerItem}/item`}
     >
+      {/* Crop Storage vs Material Storage Breakdown */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mb-3 tabular-nums">
+        <div className="p-3 rounded-2xl bg-[#081912] border border-amber-600/50 space-y-1">
+          <div className="flex items-center justify-between text-xs font-bold text-amber-300">
+            <span>Crop Storage (Granaries)</span>
+            <span>{storageSummary.crop.activeBuildingCount} active</span>
+          </div>
+          <div className="text-[11px] text-stone-200">
+            Per Crop Cap: <strong className="text-stone-100">{storageSummary.crop.capacityPerItem}</strong>{' '}
+            <span className="text-stone-400">
+              (Base {storageSummary.crop.baseCapacityPerItem} + {storageSummary.crop.bonusCapacity})
+            </span>
+          </div>
+          <div className="text-[11px] text-stone-400">
+            Stored Total: <strong className="text-amber-200">{storageSummary.crop.totalStoredUnits}</strong> /{' '}
+            {storageSummary.crop.totalCapacityUnits}
+          </div>
+        </div>
+
+        <div className="p-3 rounded-2xl bg-[#081912] border border-sky-600/50 space-y-1">
+          <div className="flex items-center justify-between text-xs font-bold text-sky-300">
+            <span>Material Storage (Warehouses)</span>
+            <span>{storageSummary.material.activeBuildingCount} active</span>
+          </div>
+          <div className="text-[11px] text-stone-200">
+            Per Item Cap: <strong className="text-stone-100">{storageSummary.material.capacityPerItem}</strong>{' '}
+            <span className="text-stone-400">
+              (Base {storageSummary.material.baseCapacityPerItem} + {storageSummary.material.bonusCapacity})
+            </span>
+          </div>
+          <div className="text-[11px] text-stone-400">
+            Stored Total: <strong className="text-sky-200">{storageSummary.material.totalStoredUnits}</strong> /{' '}
+            {storageSummary.material.totalCapacityUnits}
+          </div>
+        </div>
+      </div>
+
+      {totalOverflowCount > 0 ? (
+        <div className="mb-3 p-2.5 rounded-xl bg-amber-950/60 border border-amber-600/55 text-[11px] text-amber-200">
+          Storage surplus detected on {totalOverflowCount}{' '}
+          {totalOverflowCount === 1 ? 'resource' : 'resources'} above current capacity. Existing stock stays preserved, and new production resumes once stock drops below capacity or storage is upgraded.
+        </div>
+      ) : null}
+
       <input
         type="search"
         value={query}
@@ -56,11 +105,16 @@ export const InventorySheet: React.FC<{ snap: GameSnapshot }> = ({ snap }) => {
           const cap = state.capacities[r.id] ?? r.baseCap;
           const pct = Math.min(100, Math.round((cur / Math.max(1, cap)) * 100));
           const net = state.netRatesPerMin[r.id] ?? 0;
+          const overCap = cur > cap;
 
           return (
             <div
               key={r.id}
-              className="p-2.5 rounded-xl bg-emerald-950/45 border border-emerald-900/50 flex flex-col gap-1.5"
+              className={`p-2.5 rounded-xl border flex flex-col gap-1.5 ${
+                overCap
+                  ? 'bg-amber-950/45 border-amber-700/60'
+                  : 'bg-emerald-950/45 border-emerald-900/50'
+              }`}
             >
               <div className="flex items-center justify-between text-xs">
                 <div className="flex items-center gap-2 min-w-0">
@@ -69,6 +123,9 @@ export const InventorySheet: React.FC<{ snap: GameSnapshot }> = ({ snap }) => {
                     style={{ backgroundColor: r.color }}
                   />
                   <span className="font-semibold text-stone-100 truncate">{r.name}</span>
+                  <span className="text-[9px] uppercase text-stone-400 shrink-0">
+                    {r.storageGroup === 'granary' ? 'Crop' : 'Mat'}
+                  </span>
                 </div>
                 <div className="flex items-center gap-2 tabular-nums shrink-0">
                   {net !== 0 ? (
@@ -76,7 +133,7 @@ export const InventorySheet: React.FC<{ snap: GameSnapshot }> = ({ snap }) => {
                       {net > 0 ? `+${net}` : net}/m
                     </span>
                   ) : null}
-                  <span className="text-stone-200 font-medium">
+                  <span className={overCap ? 'text-amber-300 font-bold' : 'text-stone-200 font-medium'}>
                     {cur}/{cap}
                   </span>
                 </div>

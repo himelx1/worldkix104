@@ -2,6 +2,7 @@ import { BUILDINGS, getBuildingFootprint, getBuildingLevelMultiplier } from '../
 import { RESOURCE_LIST, ResourceId } from '../data/resources.data';
 import type { ChunkManager } from '../core/ChunkManager';
 import { BiomeId, WorldEngineState } from '../core/GameState';
+import { getBuildingStatsAtLevel } from './BuildingSimulation';
 import type { ClimateModifiers } from './EnvironmentSystem';
 import { ResourceSystem } from './ResourceSystem';
 import type { RoadNetworkSystem } from './RoadNetworkSystem';
@@ -56,7 +57,8 @@ export class ProductionSystem {
     for (let i = 0; i < state.buildings.length; i++) {
       const other = state.buildings[i];
       if (other.status === 'constructing') continue;
-      if (other.defId === 'warehouse' || other.defId === 'cart_depot') {
+      const oDef = BUILDINGS[other.defId];
+      if (oDef?.category === 'storage' || other.defId === 'cart_depot') {
         this.cachedSupplyHubs.push(other);
       } else if (
         other.defId === 'village_park' ||
@@ -65,11 +67,8 @@ export class ProductionSystem {
         other.defId === 'festival_plaza'
       ) {
         this.cachedScenics.push(other);
-      } else {
-        const oDef = BUILDINGS[other.defId];
-        if (oDef?.category === 'residential') {
-          this.cachedResidentials.push(other);
-        }
+      } else if (oDef?.category === 'residential') {
+        this.cachedResidentials.push(other);
       }
     }
   }
@@ -189,14 +188,12 @@ export class ProductionSystem {
         continue;
       }
 
-      const levelMult = getBuildingLevelMultiplier(b.level, def);
+      const stats = getBuildingStatsAtLevel(def, b.level);
+      const levelMult = stats.multiplier;
       const outputPerCycle = def.recipe
         ? Object.values(def.recipe.outputs).reduce((s, v) => s + (v ?? 0), 0)
         : 0;
-      const theoreticalHourly = def.recipe
-        ? Number((((1 / Math.max(1, def.recipe.cycleSeconds)) * levelMult) * 60 * outputPerCycle).toFixed(1))
-        : 0;
-      b.theoreticalHourlyRate = theoreticalHourly;
+      b.theoreticalHourlyRate = stats.totalHourlyOutput;
       b.realizedOutputTotal ??= 0;
 
       if (!b.enabled) {
@@ -359,7 +356,7 @@ export class ProductionSystem {
           b.status = 'storage_full';
           b.prodProgress = 0.99;
           b.actualHourlyRate = 0;
-          b.productionBottleneck = 'Warehouse storage full';
+          b.productionBottleneck = 'Storage full — expand Granary or Warehouse capacity';
           continue;
         }
 

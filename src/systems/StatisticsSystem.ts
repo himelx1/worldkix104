@@ -1,4 +1,4 @@
-import { BUILDINGS, getBuildingLevelMultiplier } from '../data/buildings.data';
+import { BUILDINGS } from '../data/buildings.data';
 import type { ChunkManager } from '../core/ChunkManager';
 import {
   CitizenProfession,
@@ -9,6 +9,7 @@ import {
   ZoneType,
 } from '../core/GameState';
 import { CHUNK_SIZE } from '../core/IsoMath';
+import { getBuildingStatsAtLevel } from './BuildingSimulation';
 
 export interface ProfessionStatRow {
   profession: CitizenProfession;
@@ -292,7 +293,7 @@ export class StatisticsSystem {
 
       if (b.status !== 'constructing' && (def.housingCapacity ?? 0) > 0) {
         const occ = buildingResidents.get(b.id) ?? 0;
-        const cap = Math.round((def.housingCapacity ?? 0) * getBuildingLevelMultiplier(b.level, def));
+        const cap = getBuildingStatsAtLevel(def, b.level).housingCapacity;
         if (b.defId === 'government_housing' || b.defId === 'worker_housing' || b.defId === 'student_dormitory' || b.defId === 'senior_living_complex') {
           housingBuckets['Special Housing (Gov/Worker/Student/Senior)'] += occ;
         } else if (def.subCategory === 'skyscraper' || (def.housingCapacity ?? 0) >= 60) {
@@ -352,7 +353,7 @@ export class StatisticsSystem {
           name: def.name,
           kind: 'workplace',
           current: w,
-          capacity: def.maxWorkers,
+          capacity: getBuildingStatsAtLevel(def, b.level).maxWorkers,
           level: b.level,
           status: b.status,
         });

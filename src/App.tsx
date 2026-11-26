@@ -9,6 +9,7 @@ import { BuildMenuSheet } from './ui/panels/BuildMenuSheet';
 import { EconomySheet } from './ui/panels/EconomySheet';
 import { InventorySheet } from './ui/panels/InventorySheet';
 import { LandUnlockSheet } from './ui/panels/LandUnlockSheet';
+import { LevelUpSheet } from './ui/panels/LevelUpSheet';
 import { PopulationSheet } from './ui/panels/PopulationSheet';
 import { QuestsSheet } from './ui/panels/QuestsSheet';
 import { SelectionPanels } from './ui/panels/SelectionPanels';
@@ -45,6 +46,7 @@ export default function App() {
       {snap.activeSheet === 'none' ? <SelectionPanels snap={snap} /> : null}
 
       {snap.activeSheet === 'build' && <BuildMenuSheet snap={snap} />}
+      {snap.activeSheet === 'levelup' && <LevelUpSheet snap={snap} />}
       {snap.activeSheet === 'land' && <LandUnlockSheet snap={snap} />}
       {snap.activeSheet === 'inventory' && <InventorySheet snap={snap} />}
       {snap.activeSheet === 'population' && <PopulationSheet snap={snap} />}

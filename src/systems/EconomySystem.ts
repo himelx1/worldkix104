@@ -2,6 +2,7 @@ import { BUILDINGS, getBuildingLevelMultiplier } from '../data/buildings.data';
 import { POLICY_MAP } from '../data/policies.data';
 import { RESOURCE_LIST, RESOURCES, ResourceId } from '../data/resources.data';
 import type { AutoTradeRule, CityEconomySnapshot, WorldEngineState } from '../core/GameState';
+import { getBuildingStatsAtLevel } from './BuildingSimulation';
 import { ResourceSystem } from './ResourceSystem';
 import { DistrictServiceSystem } from './DistrictServiceSystem';
 
@@ -47,8 +48,10 @@ export class EconomySystem {
     for (const b of state.buildings) {
       if (b.status !== 'active') continue;
       const def = BUILDINGS[b.defId];
-      if (def?.tradeCapacity) {
-        cap += Math.round(def.tradeCapacity * getBuildingLevelMultiplier(b.level, def));
+      if (!def) continue;
+      const tradeCap = getBuildingStatsAtLevel(def, b.level).tradeCapacity;
+      if (tradeCap > 0) {
+        cap += tradeCap;
       }
     }
     if (cap > 0 && state.activePolicies?.includes('free_trade_act')) {
@@ -339,11 +342,11 @@ export class EconomySystem {
         });
       citySnap.buildingCount += 1;
 
-      const levelScale = getBuildingLevelMultiplier(b.level, def);
+      const stats = getBuildingStatsAtLevel(def, b.level);
       const cov = DistrictServiceSystem.getBuildingCoverage(b, state);
       let bTax = 0;
-      if (def.taxPerMin && (def.category === 'residential' || b.status === 'active')) {
-        let t = def.taxPerMin * levelScale * cov.taxBonusMult;
+      if (stats.taxPerMin > 0 && (def.category === 'residential' || b.status === 'active')) {
+        let t = stats.taxPerMin * cov.taxBonusMult;
         if (def.category === 'residential') {
           const fillRatio = state.population.capacity > 0 ? Math.min(1, state.population.total / state.population.capacity) : 0;
           const nearScenic = scenicNodes.some((s) => Math.abs(s.gx - b.gx) <= 3 && Math.abs(s.gy - b.gy) <= 3);
@@ -359,9 +362,9 @@ export class EconomySystem {
         citySnap.taxIncome += bTax;
       }
 
-      if (b.enabled && def.upkeepPerMin > 0) {
+      if (b.enabled && stats.upkeepPerMin > 0) {
         const relaxedFactor = state.settings.difficulty === 'relaxed' ? 0.75 : 1.0;
-        const bUpkeep = def.upkeepPerMin * (1 + (b.level - 1) * 0.25) * relaxedFactor * fireDiscount;
+        const bUpkeep = stats.upkeepPerMin * relaxedFactor * fireDiscount;
         upkeepPerMin += bUpkeep;
         citySnap.upkeepExpense += bUpkeep;
       }

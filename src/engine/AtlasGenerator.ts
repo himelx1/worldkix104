@@ -1577,8 +1577,12 @@ function drawBuildingSprite(
     drawWaterTreatment(ctx, pTop, pRight, pBottom, pLeft, cx, cy, tier);
     return;
   }
-  if (def.id === 'granary') {
-    drawGranarySilos(ctx, cx, cy, def, tier);
+  if (def.id === 'granary' || def.id === 'medium_granary' || def.id === 'large_granary') {
+    drawGranarySilos(ctx, pTop, pRight, pBottom, pLeft, cx, cy, def, tier);
+    return;
+  }
+  if (def.id === 'warehouse' || def.id === 'medium_warehouse' || def.id === 'large_warehouse') {
+    drawWarehouseDepot(ctx, pTop, pRight, pBottom, pLeft, cx, cy, def, tier);
     return;
   }
   if (def.id === 'grand_monument') {
@@ -2769,17 +2773,150 @@ function drawWaterTower(ctx: CanvasRenderingContext2D, cx: number, cy: number, d
   ctx.fill();
 }
 
-function drawGranarySilos(ctx: CanvasRenderingContext2D, cx: number, cy: number, def: BuildingDef, tier: 1 | 2 | 3): void {
-  const h = 24 + (tier - 1) * 8;
-  const xs = tier >= 3 ? [-12, 0, 12] : [-10, 6];
-  for (const dx of xs) {
-    ctx.fillStyle = shadeHex(def.wallColor, dx < 0 ? 0 : -15);
-    ctx.fillRect(cx + dx - 7, cy - h - 2, 14, h);
-    ctx.fillStyle = def.roofColor;
+function drawGranarySilos(
+  ctx: CanvasRenderingContext2D,
+  pTop: { x: number; y: number },
+  pRight: { x: number; y: number },
+  pBottom: { x: number; y: number },
+  pLeft: { x: number; y: number },
+  _cx: number,
+  _cy: number,
+  def: BuildingDef,
+  tier: 1 | 2 | 3
+): void {
+  const isoPt = (u: number, v: number, z = 0) => ({
+    x: pTop.x + (pRight.x - pTop.x) * u + (pLeft.x - pTop.x) * v,
+    y: pTop.y + (pRight.y - pTop.y) * u + (pLeft.y - pTop.y) * v - z,
+  });
+
+  const cols = Math.max(1, Math.min(2, Math.round(def.width)));
+  const rows = Math.max(2, Math.min(4, Math.round(def.height)));
+  const longAlongX = def.width > def.height;
+  const countU = longAlongX ? Math.max(2, Math.min(4, def.width)) : Math.max(1, Math.min(2, def.width));
+  const countV = longAlongX ? Math.max(1, Math.min(2, def.height)) : Math.max(2, Math.min(4, def.height));
+  const totalCols = Math.max(countU, cols === 2 && !longAlongX ? 2 : countU);
+  const totalRows = Math.max(countV, rows);
+
+  // Small grain-intake office at front-most corner
+  const shedH = 11 + (tier - 1) * 2;
+  const sTop = isoPt(0.08, 0.08, 4);
+  const sRight = isoPt(0.32, 0.08, 4);
+  const sBottom = isoPt(0.32, 0.32, 4);
+  const sLeft = isoPt(0.08, 0.32, 4);
+  drawLitIsoWalls(ctx, sTop, sRight, sBottom, sLeft, shedH, shadeHex(def.wallColor, -8));
+  drawFlatTerraceRoof(ctx, sTop, sRight, sBottom, sLeft, shedH, def, tier);
+
+  const siloH = 22 + (tier - 1) * 7 + (def.id === 'large_granary' ? 8 : def.id === 'medium_granary' ? 4 : 0);
+  const siloRad = def.id === 'large_granary' ? 10 : 8.5;
+
+  // Draw cylindrical silos from back-to-front in painter order
+  for (let iu = 0; iu < totalCols; iu++) {
+    for (let iv = 0; iv < totalRows; iv++) {
+      const u = (iu + 0.5) / totalCols;
+      const v = (iv + 0.5) / totalRows;
+      const base = isoPt(u * 0.8 + 0.1, v * 0.8 + 0.1, 4);
+
+      ctx.fillStyle = shadeHex(def.wallColor, (iu + iv) % 2 === 0 ? 4 : -10);
+      ctx.fillRect(base.x - siloRad, base.y - siloH, siloRad * 2, siloH);
+      ctx.fillStyle = shadeHex(def.wallColor, -22);
+      ctx.fillRect(base.x, base.y - siloH, siloRad, siloH);
+
+      // Silo bands
+      ctx.fillStyle = def.accentColor;
+      ctx.fillRect(base.x - siloRad, base.y - siloH * 0.55, siloRad * 2, 1.5);
+
+      // Domed crop roof
+      ctx.fillStyle = def.roofColor;
+      ctx.beginPath();
+      ctx.arc(base.x, base.y - siloH, siloRad, Math.PI, 0);
+      ctx.closePath();
+      ctx.fill();
+
+      // Top vent cap
+      ctx.fillStyle = shadeHex(def.accentColor, 20);
+      ctx.fillRect(base.x - 2, base.y - siloH - siloRad - 2, 4, 3);
+    }
+  }
+}
+
+function drawWarehouseDepot(
+  ctx: CanvasRenderingContext2D,
+  pTop: { x: number; y: number },
+  pRight: { x: number; y: number },
+  pBottom: { x: number; y: number },
+  pLeft: { x: number; y: number },
+  _cx: number,
+  _cy: number,
+  def: BuildingDef,
+  tier: 1 | 2 | 3
+): void {
+  const isoPt = (u: number, v: number, z = 0) => ({
+    x: pTop.x + (pRight.x - pTop.x) * u + (pLeft.x - pTop.x) * v,
+    y: pTop.y + (pRight.y - pTop.y) * u + (pLeft.y - pTop.y) * v - z,
+  });
+
+  const lift = 4;
+  const hTop = isoPt(0.08, 0.08, lift);
+  const hRight = isoPt(0.92, 0.08, lift);
+  const hBottom = isoPt(0.92, 0.92, lift);
+  const hLeft = isoPt(0.08, 0.92, lift);
+
+  const hallH =
+    (def.id === 'large_warehouse' ? 28 : def.id === 'medium_warehouse' ? 23 : 19) + (tier - 1) * 6;
+
+  drawLitIsoWalls(ctx, hTop, hRight, hBottom, hLeft, hallH, def.wallColor);
+  drawFlatTerraceRoof(ctx, hTop, hRight, hBottom, hLeft, hallH, def, tier);
+
+  // Corrugated skylights along the roof spine
+  const longX = def.width >= def.height;
+  const skyCount = Math.max(2, Math.min(6, Math.max(def.width, def.height)));
+  for (let i = 0; i < skyCount; i++) {
+    const t0 = (i + 0.2) / skyCount;
+    const t1 = (i + 0.8) / skyCount;
+    const sA = longX ? isoPt(t0, 0.36, lift + hallH + 1) : isoPt(0.36, t0, lift + hallH + 1);
+    const sB = longX ? isoPt(t1, 0.36, lift + hallH + 1) : isoPt(0.64, t0, lift + hallH + 1);
+    const sC = longX ? isoPt(t1, 0.64, lift + hallH + 1) : isoPt(0.64, t1, lift + hallH + 1);
+    const sD = longX ? isoPt(t0, 0.64, lift + hallH + 1) : isoPt(0.36, t1, lift + hallH + 1);
+    ctx.fillStyle = '#7dd3fc';
     ctx.beginPath();
-    ctx.arc(cx + dx, cy - h - 2, 7, Math.PI, 0);
+    ctx.moveTo(sA.x, sA.y);
+    ctx.lineTo(sB.x, sB.y);
+    ctx.lineTo(sC.x, sC.y);
+    ctx.lineTo(sD.x, sD.y);
     ctx.closePath();
     ctx.fill();
+  }
+
+  // Rolling cargo dock doors on front-left and front-right facades
+  const leftBays = Math.max(1, Math.min(6, Math.round(def.height)));
+  for (let i = 1; i <= leftBays; i++) {
+    const t = i / (leftBays + 1);
+    const bx = hLeft.x + (hBottom.x - hLeft.x) * t;
+    const by = hLeft.y + (hBottom.y - hLeft.y) * t;
+    ctx.fillStyle = '#0f172a';
+    ctx.fillRect(bx - 5, by - 11, 10, 11);
+    ctx.fillStyle = def.accentColor;
+    ctx.fillRect(bx - 5, by - 12, 10, 2);
+  }
+  const rightBays = Math.max(1, Math.min(6, Math.round(def.width)));
+  for (let i = 1; i <= rightBays; i++) {
+    const t = i / (rightBays + 1);
+    const bx = hBottom.x + (hRight.x - hBottom.x) * t;
+    const by = hBottom.y + (hRight.y - hBottom.y) * t;
+    ctx.fillStyle = '#1e293b';
+    ctx.fillRect(bx - 4, by - 10, 8, 10);
+    ctx.fillStyle = '#facc15';
+    ctx.fillRect(bx - 4, by - 11, 8, 2);
+  }
+
+  // Upper logistics mezzanine on Tier >= 2 or Large Warehouse
+  if (tier >= 2 || def.id === 'large_warehouse') {
+    const mTop = isoPt(0.22, 0.22, lift + hallH);
+    const mRight = isoPt(0.58, 0.22, lift + hallH);
+    const mBottom = isoPt(0.58, 0.58, lift + hallH);
+    const mLeft = isoPt(0.22, 0.58, lift + hallH);
+    drawLitIsoWalls(ctx, mTop, mRight, mBottom, mLeft, 9, shadeHex(def.wallColor, 14));
+    drawFlatTerraceRoof(ctx, mTop, mRight, mBottom, mLeft, 9, def, tier);
   }
 }
 

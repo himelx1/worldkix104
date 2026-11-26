@@ -3,7 +3,15 @@ import type { BuildingCategory, WorkerClass } from '../data/buildings.data';
 import type { PolicyId } from '../data/policies.data';
 import type { RoadType } from '../data/roads.data';
 
-export const SCHEMA_VERSION = 2;
+export const SCHEMA_VERSION = 3;
+
+export interface GrowingTreeRecord {
+  gx: number;
+  gy: number;
+  stage: 0 | 1; // 0 = Sapling, 1 = MediumTree
+  elapsedSec: number;
+  matureType: number; // FeatureType value for mature stage
+}
 
 export type WorldEventId =
   | 'merchant_caravan'
@@ -584,6 +592,7 @@ export interface WorldEngineState {
   landModeActive?: boolean;
   corporateStats?: CorporateSectorStats[];
   treePlantations?: Record<number, TreePlantationState>;
+  growingTrees?: GrowingTreeRecord[];
 }
 
 export interface TileInspection {

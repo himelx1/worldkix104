@@ -1,7 +1,8 @@
-import { BUILDINGS, getBuildingFootprint, getBuildingLevelMultiplier } from '../data/buildings.data';
+import { BUILDINGS, getBuildingFootprint } from '../data/buildings.data';
 import type { ChunkManager } from '../core/ChunkManager';
 import { BuildingInstance, TileFlag, UtilityFlag, WorldEngineState } from '../core/GameState';
 import { CHUNK_SIZE, tileKey } from '../core/IsoMath';
+import { getBuildingStatsAtLevel } from './BuildingSimulation';
 import type { ClimateModifiers } from './EnvironmentSystem';
 
 import { RoadType } from '../data/roads.data';
@@ -237,8 +238,7 @@ export class UtilityNetworkSystem {
       const def = BUILDINGS[b.defId];
       if (!def?.powerOutput || !b.enabled) return 0;
       if (def.minWorkers > 0 && b.assignedWorkers < def.minWorkers) return 0;
-      const lvl = getBuildingLevelMultiplier(b.level, def);
-      let p = def.powerOutput * lvl;
+      let p = getBuildingStatsAtLevel(def, b.level).powerOutput;
       if (b.defId === 'wind_turbine') p *= climate.windPowerMult;
       if (b.defId === 'solar_array') p *= climate.solarPowerMult;
       if (b.defId === 'coal_power_plant' && state.resources.coal < 1) return 0;
@@ -248,7 +248,7 @@ export class UtilityNetworkSystem {
     const getScaledPowerDemand = (b: BuildingInstance): number => {
       const def = BUILDINGS[b.defId];
       if (!def?.powerDemand || !b.enabled) return 0;
-      return Math.round(def.powerDemand * getBuildingLevelMultiplier(b.level, def));
+      return getBuildingStatsAtLevel(def, b.level).powerDemand;
     };
 
     // Process enabled generators first so active grids claim shared networks before disabled generators
@@ -458,16 +458,17 @@ export class UtilityNetworkSystem {
       const def = BUILDINGS[b.defId];
       if (!def?.waterOutput || !b.enabled) return 0;
       if (def.minWorkers > 0 && b.assignedWorkers < def.minWorkers) return 0;
-      return Math.round(def.waterOutput * getBuildingLevelMultiplier(b.level, def));
+      return getBuildingStatsAtLevel(def, b.level).waterOutput;
     };
 
     const waterPolicyCut = state.activePolicies?.includes('eco_water_pact') ? 0.75 : 1.0;
     const getScaledWaterDemand = (b: BuildingInstance): number => {
       const def = BUILDINGS[b.defId];
       if (!def?.waterDemand || !b.enabled) return 0;
+      const baseScaledDemand = getBuildingStatsAtLevel(def, b.level).waterDemand;
       return Math.max(
         1,
-        Math.round(def.waterDemand * getBuildingLevelMultiplier(b.level, def) * climate.waterDemandMult * waterPolicyCut)
+        Math.round(baseScaledDemand * climate.waterDemandMult * waterPolicyCut)
       );
     };
 

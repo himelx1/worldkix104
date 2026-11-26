@@ -11,7 +11,7 @@ export type GameCommand =
   | { type: 'UNLOCK_TILE'; gx: number; gy: number }
   | { type: 'UNLOCK_BATCH_FRONTIER'; centerGx: number; centerGy: number; radius: number }
   | { type: 'UNLOCK_CHUNK'; cx: number; cy: number }
-  | { type: 'PLACE_BUILDING'; defId: string; gx: number; gy: number; rotation?: 0 | 1 }
+  | { type: 'PLACE_BUILDING'; defId: string; gx: number; gy: number; rotation?: 0 | 1; targetLevel?: number }
   | { type: 'MOVE_BUILDING'; buildingId: number; gx: number; gy: number; rotation?: 0 | 1 }
   | { type: 'PLACE_ROAD'; roadType: RoadType; gx: number; gy: number }
   | { type: 'REMOVE_ROAD'; gx: number; gy: number }

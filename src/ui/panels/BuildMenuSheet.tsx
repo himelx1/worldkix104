@@ -28,6 +28,12 @@ import {
 import { RESOURCES, ResourceId } from '../../data/resources.data';
 import { BUILDABLE_ROADS, RoadType } from '../../data/roads.data';
 import { TECH_MAP } from '../../data/techTree.data';
+import {
+  clampBuildingLevel,
+  getBuildingStatsAtLevel,
+  getDynamicBuildingSummary,
+  getEffectiveMaxLevel,
+} from '../../systems/BuildingSimulation';
 import { BuildingSystem } from '../../systems/BuildingSystem';
 import { EconomySystem } from '../../systems/EconomySystem';
 import { PLANTATION_LEVELS, PLANTATION_TOTAL_SLOTS, TreePlantationSystem } from '../../systems/TreePlantationSystem';
@@ -536,7 +542,11 @@ export const BuildMenuSheet: React.FC<{ snap: GameSnapshot }> = ({ snap }) => {
         ) : null}
 
         {filteredBuildings.map((b) => {
-          const req = BuildingSystem.getGlobalBuildRequirements(b.id, state);
+          const blueprintLvl = clampBuildingLevel(b, state.unlockedBuildingLevels?.[b.id] ?? 1);
+          const maxLevel = getEffectiveMaxLevel(b);
+          const req = BuildingSystem.getGlobalBuildRequirements(b.id, state, blueprintLvl);
+          const bpStats = getBuildingStatsAtLevel(b, blueprintLvl);
+          const bpSummary = getDynamicBuildingSummary(b, blueprintLvl);
           const showTip = expandedTipId === b.id;
           const largeFactory = isLargeFactory(b);
           const rotatable = b.width !== b.height && b.footprintRotatable !== false;
@@ -545,9 +555,10 @@ export const BuildMenuSheet: React.FC<{ snap: GameSnapshot }> = ({ snap }) => {
             ? [
                 {
                   name: RESOURCES.wood.name,
-                  lv1: TreePlantationSystem.getTheoreticalHourlyWood(1),
-                  lv2: TreePlantationSystem.getTheoreticalHourlyWood(b.maxLevel),
-                  maxLevelLabel: `Lv.${b.maxLevel}`,
+                  lvCur: TreePlantationSystem.getTheoreticalHourlyWood(blueprintLvl),
+                  lvMax: TreePlantationSystem.getTheoreticalHourlyWood(maxLevel),
+                  curLabel: `Lv.${blueprintLvl}`,
+                  maxLevelLabel: `Lv.${maxLevel}`,
                 },
               ]
             : b.recipe
@@ -555,16 +566,25 @@ export const BuildMenuSheet: React.FC<{ snap: GameSnapshot }> = ({ snap }) => {
                   .filter(([, amt]) => (amt ?? 0) > 0)
                   .map(([k, amt]) => {
                     const rid = k as ResourceId;
-                    const lv1 = getRecipeHourlyAmount(amt ?? 0, b.recipe!.cycleSeconds, getBuildingLevelMultiplier(1, b));
-                    const lv2 =
-                      b.maxLevel >= 2
-                        ? getRecipeHourlyAmount(amt ?? 0, b.recipe!.cycleSeconds, getBuildingLevelMultiplier(2, b))
+                    const lvCur = getRecipeHourlyAmount(
+                      amt ?? 0,
+                      b.recipe!.cycleSeconds,
+                      getBuildingLevelMultiplier(blueprintLvl, b)
+                    );
+                    const lvMax =
+                      maxLevel > blueprintLvl
+                        ? getRecipeHourlyAmount(
+                            amt ?? 0,
+                            b.recipe!.cycleSeconds,
+                            getBuildingLevelMultiplier(maxLevel, b)
+                          )
                         : null;
                     return {
                       name: RESOURCES[rid]?.name ?? rid,
-                      lv1,
-                      lv2,
-                      maxLevelLabel: 'Lv.2',
+                      lvCur,
+                      lvMax,
+                      curLabel: `Lv.${blueprintLvl}`,
+                      maxLevelLabel: `Lv.${maxLevel}`,
                     };
                   })
               : [];
@@ -596,18 +616,18 @@ export const BuildMenuSheet: React.FC<{ snap: GameSnapshot }> = ({ snap }) => {
                   <div className="flex items-center justify-between gap-1.5 min-w-0">
                     <span className="text-sm font-bold text-stone-100 truncate">{b.name}</span>
                     <span className="text-[11px] font-semibold text-stone-300 tabular-nums shrink-0">
-                      {b.width}×{b.height}
+                      Lv.{blueprintLvl}/{maxLevel} · {b.width}×{b.height}
                       {rotatable ? ' ↻' : ''}
                     </span>
                   </div>
-                  <p className="text-[11px] text-stone-300/85 line-clamp-2 mt-0.5 leading-snug">
-                    {b.description}
+                  <p className="text-[11px] text-emerald-200/90 font-medium line-clamp-2 mt-0.5 leading-snug tabular-nums">
+                    {bpSummary.headline}
                   </p>
                   {b.corporateSector ? (
                     <div className="flex items-center gap-1 text-[10px] font-semibold text-cyan-300 mt-1">
                       <Building2 className="w-3 h-3 shrink-0" />
                       <span>
-                        {b.corporateSector} · Lv.1 {getCorporateLevelTitle(1)} → Lv.{b.maxLevel}
+                        {b.corporateSector} · Lv.{blueprintLvl} {getCorporateLevelTitle(blueprintLvl)} → Lv.{maxLevel}
                       </span>
                     </div>
                   ) : b.isAutomatedTreePlantation ? (
@@ -615,14 +635,14 @@ export const BuildMenuSheet: React.FC<{ snap: GameSnapshot }> = ({ snap }) => {
                       <Trees className="w-3 h-3 shrink-0" />
                       <span>
                         10×20 Main Hall + {PLANTATION_TOTAL_SLOTS}-Plot Plantation · {PLANTATION_LEVELS[0].maxTrees}–
-                        {PLANTATION_LEVELS[PLANTATION_LEVELS.length - 1].maxTrees} Trees · Lv.1→Lv.{b.maxLevel}
+                        {PLANTATION_LEVELS[PLANTATION_LEVELS.length - 1].maxTrees} Trees · Lv.1→Lv.{maxLevel}
                       </span>
                     </div>
                   ) : largeFactory ? (
                     <div className="flex items-center gap-1 text-[10px] font-semibold text-amber-300 mt-1">
                       <Factory className="w-3 h-3 shrink-0" />
                       <span>
-                        Mega Factory ({b.width}×{b.height}) · Lv.1→Lv.{b.maxLevel}
+                        Mega Factory ({b.width}×{b.height}) · Lv.1→Lv.{maxLevel}
                       </span>
                     </div>
                   ) : null}
@@ -662,8 +682,8 @@ export const BuildMenuSheet: React.FC<{ snap: GameSnapshot }> = ({ snap }) => {
                     <div key={o.name} className="flex items-center justify-between gap-2">
                       <span className="truncate">{o.name} Output:</span>
                       <span className="font-bold text-amber-300 shrink-0">
-                        {formatInGameHourlyRate(o.lv1)} Lv.1
-                        {o.lv2 !== null ? ` → ${formatInGameHourlyRate(o.lv2)} ${o.maxLevelLabel}` : ''}
+                        {formatInGameHourlyRate(o.lvCur)} {o.curLabel}
+                        {o.lvMax !== null ? ` → ${formatInGameHourlyRate(o.lvMax)} ${o.maxLevelLabel}` : ''}
                       </span>
                     </div>
                   ))}
@@ -701,7 +721,9 @@ export const BuildMenuSheet: React.FC<{ snap: GameSnapshot }> = ({ snap }) => {
               {/* Placement Conditions, Logistics & Utilities */}
               <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] text-stone-300/90 tabular-nums px-1">
                 <span>
-                  {b.maxWorkers > 0 ? `${b.minWorkers}-${b.maxWorkers} ${b.workerClass}s` : 'Automated'}
+                  {bpStats.maxWorkers > 0
+                    ? `${bpStats.minWorkers}-${bpStats.maxWorkers} ${b.workerClass}s`
+                    : 'Automated'}
                 </span>
                 {b.truckCapacity ? (
                   <span className="inline-flex items-center gap-0.5 text-lime-300">
@@ -709,22 +731,36 @@ export const BuildMenuSheet: React.FC<{ snap: GameSnapshot }> = ({ snap }) => {
                     {b.truckCapacity} Trucks
                   </span>
                 ) : null}
-                {b.storageCapacityBonus ? (
-                  <span className="text-emerald-300">+{b.storageCapacityBonus} Cap</span>
+                {bpStats.granaryBonus > 0 ? (
+                  <span className="text-amber-300">+{bpStats.granaryBonus} Crop Cap</span>
+                ) : null}
+                {bpStats.warehouseBonus + bpStats.storageCapacityBonus > 0 ? (
+                  <span className="text-sky-300">
+                    +{bpStats.warehouseBonus + bpStats.storageCapacityBonus} Mat Cap
+                  </span>
+                ) : null}
+                {bpStats.housingCapacity > 0 ? (
+                  <span className="text-sky-300">{bpStats.housingCapacity} Homes</span>
+                ) : null}
+                {bpStats.powerOutput > 0 ? (
+                  <span className="text-amber-300">+{bpStats.powerOutput} MW Gen</span>
+                ) : null}
+                {bpStats.waterOutput > 0 ? (
+                  <span className="text-sky-300">+{bpStats.waterOutput} Water</span>
                 ) : null}
                 {b.exportsSurplus ? <span className="text-cyan-300">Auto-Export FX</span> : null}
                 {b.importsUnavailable ? <span className="text-sky-300">Auto-Import</span> : null}
                 {b.requiresRoad ? <span>Needs {req.minRoadTierName ?? 'Road'}</span> : null}
-                {b.powerDemand ? (
+                {bpStats.powerDemand > 0 ? (
                   <span className="inline-flex items-center gap-0.5 text-amber-200">
                     <Zap className="w-3 h-3" />
-                    {b.powerDemand} MW
+                    {bpStats.powerDemand} MW
                   </span>
                 ) : null}
-                {b.waterDemand ? (
+                {bpStats.waterDemand > 0 ? (
                   <span className="inline-flex items-center gap-0.5 text-sky-300">
                     <Droplets className="w-3 h-3" />
-                    {b.waterDemand} Water
+                    {bpStats.waterDemand} Water
                   </span>
                 ) : null}
               </div>
@@ -759,7 +795,12 @@ export const BuildMenuSheet: React.FC<{ snap: GameSnapshot }> = ({ snap }) => {
                     <button
                       type="button"
                       onClick={() => {
-                        GameController.setTool({ mode: 'build', defId: b.id, rotation: 0 });
+                        GameController.setTool({
+                          mode: 'build',
+                          defId: b.id,
+                          rotation: 0,
+                          targetLevel: blueprintLvl,
+                        });
                         GameController.setActiveSheet('none');
                       }}
                       className={`flex-1 min-h-[44px] px-3 rounded-xl font-bold text-xs flex items-center justify-center gap-1.5 ${

@@ -1,6 +1,7 @@
-import { BUILDINGS, getBuildingLevelMultiplier } from '../data/buildings.data';
+import { BUILDINGS } from '../data/buildings.data';
 import { FOOD_RESOURCE_IDS, RESOURCE_LIST, RESOURCES, ResourceId } from '../data/resources.data';
 import type { WorldEngineState } from '../core/GameState';
+import { getBuildingStatsAtLevel } from './BuildingSimulation';
 
 export class ResourceSystem {
   public static createInitialResources(): {
@@ -24,18 +25,15 @@ export class ResourceSystem {
       if (b.status === 'constructing') continue;
       const def = BUILDINGS[b.defId];
       if (!def) continue;
-      const levelScale = getBuildingLevelMultiplier(b.level, def);
-      if (def.granaryBonus) granaryBonus += Math.round(def.granaryBonus * levelScale);
-      if (def.warehouseBonus) warehouseBonus += Math.round(def.warehouseBonus * levelScale);
-      if (def.storageCapacityBonus) warehouseBonus += Math.round(def.storageCapacityBonus * levelScale);
+      const stats = getBuildingStatsAtLevel(def, b.level);
+      granaryBonus += stats.granaryBonus;
+      warehouseBonus += stats.warehouseBonus + stats.storageCapacityBonus;
     }
 
     for (const r of RESOURCE_LIST) {
       const bonus = r.storageGroup === 'granary' ? granaryBonus : warehouseBonus;
       state.capacities[r.id] = r.baseCap + bonus;
-      if (state.resources[r.id] > state.capacities[r.id]) {
-        state.resources[r.id] = state.capacities[r.id];
-      }
+      // Preserve existing stored resources above reduced cap; new inflow blocks until stock drops below cap.
     }
   }
 

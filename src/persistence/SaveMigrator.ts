@@ -78,8 +78,22 @@ export class SaveMigrator {
       'automated_logging_factory',
     ]);
 
-    // Normalize buildings, compute blueprint levels, and enforce maxPerWorld safety
+    // Normalize buildings, assign missing/duplicate IDs monotonically, compute blueprint levels, and enforce maxPerWorld safety
     const maxPerWorldSeen = new Map<string, number>();
+    const usedIds = new Set<number>();
+    let highestId = 0;
+    for (const rawB of buildingsRaw) {
+      if (rawB && typeof rawB === 'object' && typeof rawB.id === 'number' && rawB.id > highestId) {
+        highestId = Math.floor(rawB.id);
+      }
+    }
+    let nextIdCursor = Math.max(
+      typeof candidate.nextBuildingId === 'number' && candidate.nextBuildingId > 0
+        ? Math.floor(candidate.nextBuildingId)
+        : 1,
+      highestId + 1
+    );
+
     const normalizedBuildings = [];
     for (const b of buildingsRaw) {
       if (!b || typeof b !== 'object' || typeof b.defId !== 'string') continue;
@@ -101,10 +115,23 @@ export class SaveMigrator {
         }
         maxPerWorldSeen.set(b.defId, seen + 1);
       }
-      const lvl = Math.min(def.maxLevel, Math.max(1, Number(b.level ?? 1)));
-      unlockedBuildingLevels[b.defId] = Math.max(unlockedBuildingLevels[b.defId] ?? 1, lvl);
+      let assignedId = typeof b.id === 'number' && b.id > 0 ? Math.floor(b.id) : 0;
+      if (assignedId <= 0 || usedIds.has(assignedId)) {
+        assignedId = nextIdCursor++;
+        warnings.push(`Reassigned duplicate/invalid building ID for ${def.name} -> #${assignedId}.`);
+      }
+      usedIds.add(assignedId);
+      if (assignedId >= nextIdCursor) nextIdCursor = assignedId + 1;
+
+      const canonicalMaxLevel = def.category === 'storage' ? 4 : 5;
+      const lvl = Math.min(canonicalMaxLevel, Math.max(1, Math.floor(Number(b.level ?? 1))));
+      unlockedBuildingLevels[b.defId] = Math.min(
+        canonicalMaxLevel,
+        Math.max(unlockedBuildingLevels[b.defId] ?? 1, lvl)
+      );
       normalizedBuildings.push({
         ...b,
+        id: assignedId,
         level: lvl,
         rotation: (b.rotation === 1 ? 1 : 0) as 0 | 1,
         cityId: typeof b.cityId === 'number' && b.cityId > 0 ? b.cityId : cities[0].id,
@@ -119,6 +146,7 @@ export class SaveMigrator {
       capacities: { ...base.capacities, ...(candidate.capacities ?? {}) },
       marketPrices: { ...base.marketPrices, ...(candidate.marketPrices ?? {}) },
       buildings: normalizedBuildings,
+      nextBuildingId: nextIdCursor,
       unlockedBuildingLevels,
       cities,
       activeCityId:
@@ -158,6 +186,7 @@ export class SaveMigrator {
         candidate.treePlantations && typeof candidate.treePlantations === 'object'
           ? candidate.treePlantations
           : {},
+      growingTrees: Array.isArray(candidate.growingTrees) ? candidate.growingTrees : [],
     };
     delete (migrated as unknown as Record<string, unknown>).loggingStats;
     delete (migrated as unknown as Record<string, unknown>).treeRegrowthQueue;

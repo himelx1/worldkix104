@@ -18,6 +18,7 @@ import type { NetworkDiagnosticsReport } from '../../systems/NetworkDiagnosticsS
 export type ActiveSheet =
   | 'none'
   | 'build'
+  | 'levelup'
   | 'land'
   | 'inventory'
   | 'population'

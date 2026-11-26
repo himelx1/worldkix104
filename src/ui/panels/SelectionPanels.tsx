@@ -22,10 +22,25 @@ import { BiomeId, RoadDirection, UtilityFlag, ZONE_META, ZoneType } from '../../
 import { BUILDINGS, getBuildingFootprint, getCorporateLevelTitle } from '../../data/buildings.data';
 import { RESOURCES, ResourceId } from '../../data/resources.data';
 import { getRoadProperties, ROAD_UPGRADE_TIERS, ROADS, RoadType } from '../../data/roads.data';
-import { DEPOSIT_NAMES, DepositType, FeatureType, isTreeFeature, TREE_SPECIES } from '../../data/trees.data';
+import {
+  DEPOSIT_NAMES,
+  DepositType,
+  FeatureType,
+  isMatureTreeFeature,
+  isTreeFeature,
+  TREE_SPECIES,
+} from '../../data/trees.data';
+import {
+  BuildingCostCalculator,
+  buildUpgradeDeltas,
+  getBuildingSimSnapshot,
+  getDynamicBuildingSummary,
+  getEffectiveMaxLevel,
+} from '../../systems/BuildingSimulation';
 import { BuildingSystem } from '../../systems/BuildingSystem';
 import { DistrictServiceSystem } from '../../systems/DistrictServiceSystem';
 import { ProductionSystem } from '../../systems/ProductionSystem';
+import { TreeGrowthSystem } from '../../systems/TreeGrowthSystem';
 import { PLANTATION_TOTAL_SLOTS, TreePlantationSystem } from '../../systems/TreePlantationSystem';
 import { GameController, GameSnapshot } from '../bridge/GameController';
 
@@ -49,8 +64,14 @@ export const SelectionPanels: React.FC<{ snap: GameSnapshot }> = ({ snap }) => {
     if (!def) return null;
 
     const fp = getBuildingFootprint(def, b.rotation ?? 0);
-    const canUpgrade = b.status !== 'constructing' && b.level < def.maxLevel;
+    const maxLevel = getEffectiveMaxLevel(def);
+    const canUpgrade = b.status !== 'constructing' && b.level < maxLevel;
     const preview = BuildingSystem.getBuildingUpgradePreview(b, snap.state);
+    const simSnap = getBuildingSimSnapshot(b, snap.state, (rid) =>
+      BuildingSystem.getResourceProducers(rid)
+    );
+    const dynSummary = getDynamicBuildingSummary(def, b.level, b, snap.state);
+    const copyCost = BuildingCostCalculator.getCopyCost(def, b.level);
     const adj = ProductionSystem.getBuildingAdjacencyBonus(
       b,
       snap.state,
@@ -60,42 +81,15 @@ export const SelectionPanels: React.FC<{ snap: GameSnapshot }> = ({ snap }) => {
       snap.state.level >= def.unlockLevel &&
       (!def.requiredTech || snap.state.unlockedTechIds.includes(def.requiredTech));
 
-    const upgradeDiffs: string[] = [];
-    if (preview?.next) {
-      if (preview.cur.totalHourlyOutput !== preview.next.totalHourlyOutput) {
-        upgradeDiffs.push(
-          `Output: ${formatInGameHourlyRate(preview.cur.totalHourlyOutput)} → ${formatInGameHourlyRate(preview.next.totalHourlyOutput)}`
-        );
-      }
-      if (def.isAutomatedTreePlantation) {
-        const curCfg = TreePlantationSystem.getLevelConfig(b.level);
-        const nextCfg = TreePlantationSystem.getLevelConfig(b.level + 1);
-        upgradeDiffs.push(`Trees: ${curCfg.maxTrees} → ${nextCfg.maxTrees}`);
-        upgradeDiffs.push(`Cycle: ${curCfg.growSeconds}s → ${nextCfg.growSeconds}s`);
-        upgradeDiffs.push(
-          `Wood/Tree: ${(curCfg.woodPerTree * curCfg.efficiency).toFixed(1)} → ${(nextCfg.woodPerTree * nextCfg.efficiency).toFixed(1)}`
-        );
-      }
-      if (preview.next.housingCapacity > preview.cur.housingCapacity) {
-        upgradeDiffs.push(`Homes: ${preview.cur.housingCapacity} → ${preview.next.housingCapacity}`);
-      }
-      if (preview.next.warehouseBonus + preview.next.granaryBonus > preview.cur.warehouseBonus + preview.cur.granaryBonus) {
-        upgradeDiffs.push(
-          `Storage: +${preview.cur.warehouseBonus + preview.cur.granaryBonus} → +${preview.next.warehouseBonus + preview.next.granaryBonus}`
-        );
-      }
-      if (preview.next.powerOutput > preview.cur.powerOutput) {
-        upgradeDiffs.push(`Power: ${preview.cur.powerOutput} → ${preview.next.powerOutput} MW`);
-      }
-      if (preview.next.waterOutput > preview.cur.waterOutput) {
-        upgradeDiffs.push(`Water: ${preview.cur.waterOutput} → ${preview.next.waterOutput}`);
-      }
-      if (preview.next.maxWorkers > preview.cur.maxWorkers) {
-        upgradeDiffs.push(`Workers: ${preview.cur.maxWorkers} → ${preview.next.maxWorkers}`);
-      }
-      if (preview.next.tradeCapacity > preview.cur.tradeCapacity) {
-        upgradeDiffs.push(`Trade: ${preview.cur.tradeCapacity} → ${preview.next.tradeCapacity}/batch`);
-      }
+    const upgradeDeltas = preview?.next ? buildUpgradeDeltas(preview.cur, preview.next) : [];
+    const upgradeDiffs: string[] = upgradeDeltas.map((d) => `${d.label}: ${d.current} → ${d.next}`);
+    if (def.isAutomatedTreePlantation && canUpgrade) {
+      const curCfg = TreePlantationSystem.getLevelConfig(b.level);
+      const nextCfg = TreePlantationSystem.getLevelConfig(b.level + 1);
+      upgradeDiffs.push(`Cycle: ${curCfg.growSeconds}s → ${nextCfg.growSeconds}s`);
+      upgradeDiffs.push(
+        `Wood/Tree: ${(curCfg.woodPerTree * curCfg.efficiency).toFixed(1)} → ${(nextCfg.woodPerTree * nextCfg.efficiency).toFixed(1)}`
+      );
     }
 
     return (
@@ -104,12 +98,12 @@ export const SelectionPanels: React.FC<{ snap: GameSnapshot }> = ({ snap }) => {
           <div className="flex items-start justify-between gap-2 min-w-0">
             <div className="min-w-0">
               <div className="text-sm font-bold text-stone-100 tabular-nums truncate">
-                {def.name} · Lv.{b.level}/{def.maxLevel} ({fp.width}×{fp.height})
+                {def.name} · Lv.{b.level}/{maxLevel} ({fp.width}×{fp.height})
               </div>
               <div className="text-xs text-stone-300/85 mt-0.5 tabular-nums">
-                Status:{' '}
+                ID #{b.id} · Status:{' '}
                 <span className="text-amber-300 font-semibold capitalize">
-                  {b.status.replace('_', ' ')}
+                  {b.status.replace(/_/g, ' ')}
                 </span>
                 {b.status === 'constructing' ? ` (${Math.round(b.buildProgress * 100)}%)` : ''}
                 {` · (${b.gx}, ${b.gy})`}
@@ -135,7 +129,45 @@ export const SelectionPanels: React.FC<{ snap: GameSnapshot }> = ({ snap }) => {
             </button>
           </div>
 
-          <p className="text-xs text-stone-300 leading-relaxed">{def.description}</p>
+          <div className="text-xs text-emerald-200/95 bg-[#081710] border border-emerald-800/55 rounded-xl px-3 py-2 space-y-1.5 tabular-nums">
+            <div className="font-semibold text-stone-100 leading-snug">{dynSummary.headline}</div>
+            {dynSummary.metrics.length > 0 ? (
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-1.5 text-[10px]">
+                {dynSummary.metrics.map((m) => (
+                  <div
+                    key={m.label}
+                    className="px-2 py-1.5 rounded-lg bg-[#05100b] border border-emerald-900/50 min-w-0"
+                  >
+                    <div className="text-stone-400 truncate">{m.label}</div>
+                    <div
+                      className={`font-bold truncate ${
+                        m.accent === 'amber'
+                          ? 'text-amber-300'
+                          : m.accent === 'sky'
+                            ? 'text-sky-300'
+                            : m.accent === 'rose'
+                              ? 'text-rose-300'
+                              : m.accent === 'emerald'
+                                ? 'text-emerald-300'
+                                : 'text-stone-200'
+                      }`}
+                    >
+                      {m.value}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : null}
+            {simSnap && simSnap.storageType !== 'none' ? (
+              <div className="text-[11px] text-amber-200 font-medium pt-0.5">
+                {simSnap.storageType === 'crop' ? 'Crop Inventory Stored:' : 'Material Inventory Stored:'}{' '}
+                <strong>{simSnap.relevantStoredTotal.toLocaleString()}</strong> /{' '}
+                {simSnap.relevantStoredCapacity.toLocaleString()} units
+              </div>
+            ) : null}
+          </div>
+
+          <p className="text-[11px] text-stone-400 leading-relaxed">{def.description}</p>
 
           {/* Automated Tree Plantation Factory Live Telemetry */}
           {def.isAutomatedTreePlantation ? (() => {
@@ -200,14 +232,27 @@ export const SelectionPanels: React.FC<{ snap: GameSnapshot }> = ({ snap }) => {
             );
           })() : null}
 
-          {def.truckCapacity || def.storageCapacityBonus || def.exportsSurplus || def.importsUnavailable ? (
+          {def.truckCapacity ||
+          simSnap?.stats.granaryBonus ||
+          simSnap?.stats.warehouseBonus ||
+          simSnap?.stats.storageCapacityBonus ||
+          def.exportsSurplus ||
+          def.importsUnavailable ? (
             <div className="flex flex-wrap gap-2 text-[11px] text-cyan-200 bg-[#071820] border border-cyan-800/50 rounded-xl px-3 py-1.5 tabular-nums">
               {def.truckCapacity ? (
                 <span className="inline-flex items-center gap-1">
                   <Truck className="w-3.5 h-3.5 text-lime-300" /> Fleet: {def.truckCapacity} Trucks
                 </span>
               ) : null}
-              {def.storageCapacityBonus ? <span>Storage: +{def.storageCapacityBonus} Cap</span> : null}
+              {simSnap?.stats.granaryBonus ? (
+                <span>Crop Storage: +{simSnap.stats.granaryBonus}/crop</span>
+              ) : null}
+              {(simSnap?.stats.warehouseBonus ?? 0) + (simSnap?.stats.storageCapacityBonus ?? 0) > 0 ? (
+                <span>
+                  Material Storage: +
+                  {(simSnap?.stats.warehouseBonus ?? 0) + (simSnap?.stats.storageCapacityBonus ?? 0)}/item
+                </span>
+              ) : null}
               {def.exportsSurplus ? <span>Auto-Exports Surplus for FX</span> : null}
               {def.importsUnavailable ? <span>Auto-Imports Scarce Inputs</span> : null}
             </div>
@@ -460,12 +505,21 @@ export const SelectionPanels: React.FC<{ snap: GameSnapshot }> = ({ snap }) => {
                   type="button"
                   onClick={() => {
                     setConfirmDemolish(false);
-                    GameController.setTool({ mode: 'build', defId: b.defId, rotation: b.rotation ?? 0 });
+                    GameController.setTool({
+                      mode: 'build',
+                      defId: b.defId,
+                      rotation: b.rotation ?? 0,
+                      targetLevel: b.level,
+                      copiedFromBuildingId: b.id,
+                    });
                   }}
-                  className="flex-1 min-h-[44px] px-3 rounded-xl bg-[#10261b] border border-emerald-700/60 text-emerald-200 hover:text-white text-xs font-semibold flex items-center justify-center gap-1.5"
+                  title={`Copy at Lv.${b.level}: ${copyCost.coinCost.toLocaleString()}C`}
+                  className="flex-1 min-h-[44px] px-2.5 rounded-xl bg-[#10261b] border border-emerald-700/60 text-emerald-200 hover:text-white text-xs font-semibold flex items-center justify-center gap-1 tabular-nums"
                 >
-                  <Copy className="w-4 h-4" />
-                  Copy
+                  <Copy className="w-3.5 h-3.5 shrink-0" />
+                  <span className="truncate">
+                    Copy Lv.{b.level} ({copyCost.coinCost}C)
+                  </span>
                 </button>
               ) : null}
               {!confirmDemolish ? (
@@ -568,13 +622,47 @@ export const SelectionPanels: React.FC<{ snap: GameSnapshot }> = ({ snap }) => {
             </button>
           </div>
 
-          {species ? (
-            <div className="text-xs font-medium text-lime-300 bg-[#08150f] border border-emerald-800/60 rounded-xl px-3 py-2 tabular-nums">
-              {isRuin
-                ? 'Ancient overgrown ruins hiding relics, Coins & Research Points.'
-                : `${species.name} · ${t.featureHp}/${t.featureMaxHp} HP`}
-            </div>
-          ) : null}
+          {species ? (() => {
+            const growthInfo = TreeGrowthSystem.getGrowthInfo(
+              snap.state,
+              t.gx,
+              t.gy,
+              t.featureType
+            );
+            const matureTree = isTreeFeature(t.featureType) && isMatureTreeFeature(t.featureType);
+            return (
+              <div className="text-xs font-medium text-lime-300 bg-[#08150f] border border-emerald-800/60 rounded-xl px-3 py-2 tabular-nums space-y-1.5">
+                <div className="flex items-center justify-between gap-2">
+                  <span>
+                    {isRuin
+                      ? 'Ancient overgrown ruins hiding relics, Coins & Research Points.'
+                      : `${species.name} · ${t.featureHp}/${t.featureMaxHp} HP`}
+                  </span>
+                  {matureTree ? (
+                    <span className="text-[10px] font-bold text-amber-300 shrink-0">Mature</span>
+                  ) : growthInfo ? (
+                    <span className="text-[10px] font-bold text-emerald-300 shrink-0">
+                      {growthInfo.progressPct}%
+                    </span>
+                  ) : null}
+                </div>
+                {growthInfo ? (
+                  <>
+                    <div className="text-[11px] text-stone-300">
+                      {growthInfo.stageLabel} → Growing into{' '}
+                      <strong className="text-emerald-200">{growthInfo.matureName}</strong> (Workers harvest only mature trees)
+                    </div>
+                    <div className="w-full h-1.5 bg-[#05100b] rounded-sm overflow-hidden">
+                      <div
+                        className="h-full bg-gradient-to-r from-lime-500 to-emerald-400 transition-all"
+                        style={{ width: `${Math.max(4, growthInfo.progressPct)}%` }}
+                      />
+                    </div>
+                  </>
+                ) : null}
+              </div>
+            );
+          })() : null}
 
           <div className="flex flex-wrap items-center gap-2">
             {!t.unlocked ? (
@@ -605,7 +693,9 @@ export const SelectionPanels: React.FC<{ snap: GameSnapshot }> = ({ snap }) => {
                 className="flex-1 min-h-[46px] px-4 rounded-xl bg-gradient-to-b from-amber-400 to-amber-500 text-stone-950 font-bold text-xs flex items-center justify-center gap-1.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.45),0_3px_0_#92400e] active:translate-y-[2px]"
               >
                 <Axe className="w-4 h-4" />
-                Chop / Harvest
+                {t.featureType === FeatureType.Sapling || t.featureType === FeatureType.MediumTree
+                  ? 'Clear Young Tree'
+                  : 'Chop / Harvest'}
               </button>
             ) : curRoad ? (
               <>

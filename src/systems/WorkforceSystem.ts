@@ -1,5 +1,6 @@
 import { BUILDINGS, BuildingCategory } from '../data/buildings.data';
 import type { BuildingInstance, WorldEngineState } from '../core/GameState';
+import { getBuildingStatsAtLevel } from './BuildingSimulation';
 
 const CATEGORY_ORDER: BuildingCategory[] = [
   'energy',
@@ -28,8 +29,8 @@ export class WorkforceSystem {
   public getEffectiveMaxWorkers(b: BuildingInstance, workerStrainReduction = 0): number {
     const def = BUILDINGS[b.defId];
     if (!def || def.maxWorkers <= 0) return 0;
-    const levelBonus = b.level > 1 && def.maxWorkers >= 2 ? b.level - 1 : 0;
-    return Math.max(1, Math.round((def.maxWorkers + levelBonus) * (1 - workerStrainReduction)));
+    const baseMax = getBuildingStatsAtLevel(def, b.level).maxWorkers;
+    return Math.max(1, Math.round(baseMax * (1 - workerStrainReduction)));
   }
 
   public assignWorkers(state: WorldEngineState, workerStrainReduction = 0): void {

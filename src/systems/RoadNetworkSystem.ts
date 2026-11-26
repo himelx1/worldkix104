@@ -481,10 +481,14 @@ export class RoadNetworkSystem {
     for (let i = 0; i < state.buildings.length; i++) {
       const other = state.buildings[i];
       if (other.status !== 'active') continue;
-      if (other.defId === 'cart_depot' || other.defId === 'train_station' || other.defId === 'warehouse') {
+      const odef = BUILDINGS[other.defId];
+      if (
+        other.defId === 'cart_depot' ||
+        other.defId === 'train_station' ||
+        odef?.category === 'storage'
+      ) {
         hasMit = true;
       }
-      const odef = BUILDINGS[other.defId];
       if (odef?.logisticsBoost) {
         boost += odef.logisticsBoost * (1 + (other.level - 1) * 0.2);
       }

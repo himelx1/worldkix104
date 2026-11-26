@@ -437,7 +437,9 @@ export class CitizenSystem {
       agent.stridePhase += dtSec * 12;
       if (agent.taskTimer > 0) return;
 
-      const outcome = BuildingSystem.chopTile(agent.targetTileGx, agent.targetTileGy, 18, chunks, state);
+      const outcome = BuildingSystem.chopTile(agent.targetTileGx, agent.targetTileGy, 18, chunks, state, {
+        allowImmature: false,
+      });
       if (outcome.hit) {
         events?.onChopHit(agent.targetTileGx, agent.targetTileGy, outcome);
         if (outcome.cleared) {

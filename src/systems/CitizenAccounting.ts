@@ -1,5 +1,6 @@
-import { BUILDINGS, getBuildingLevelMultiplier, WorkerClass } from '../data/buildings.data';
+import { BUILDINGS, WorkerClass } from '../data/buildings.data';
 import type { AgeGroup, CitizenCohort, WorldEngineState } from '../core/GameState';
+import { getBuildingStatsAtLevel } from './BuildingSimulation';
 
 export interface CityPopulationSummary {
   cityId: number;
@@ -75,14 +76,13 @@ export class CitizenAccounting {
     const homeAllocations: Array<{ homeId: number; cityId: number; residents: number }> = [];
     const totalHomeCap = homes.reduce((acc, h) => {
       const def = BUILDINGS[h.defId];
-      const scale = getBuildingLevelMultiplier(h.level, def);
-      return acc + Math.round((def?.housingCapacity ?? 0) * scale);
+      return acc + (def ? getBuildingStatsAtLevel(def, h.level).housingCapacity : 0);
     }, 0);
 
     for (let i = 0; i < homes.length && remainingPop > 0; i++) {
       const h = homes[i];
       const def = BUILDINGS[h.defId]!;
-      const cap = Math.round((def.housingCapacity ?? 0) * getBuildingLevelMultiplier(h.level, def));
+      const cap = getBuildingStatsAtLevel(def, h.level).housingCapacity;
       const share =
         i === homes.length - 1
           ? Math.min(cap, remainingPop)
@@ -102,7 +102,7 @@ export class CitizenAccounting {
     for (let i = 0; i < homes.length && remainingPop > 0; i++) {
       const h = homes[i];
       const def = BUILDINGS[h.defId]!;
-      const cap = Math.round((def.housingCapacity ?? 0) * getBuildingLevelMultiplier(h.level, def));
+      const cap = getBuildingStatsAtLevel(def, h.level).housingCapacity;
       const existing = homeAllocations.find((a) => a.homeId === h.id);
       const cur = existing?.residents ?? 0;
       const room = Math.max(0, cap - cur);
@@ -268,7 +268,7 @@ export class CitizenAccounting {
       const cid = b.cityId ?? state.cities[0]?.id ?? 1;
       const entry = map.get(cid);
       if (entry) {
-        entry.housingCapacity += Math.round(def.housingCapacity * getBuildingLevelMultiplier(b.level, def));
+        entry.housingCapacity += getBuildingStatsAtLevel(def, b.level).housingCapacity;
       }
     }
 

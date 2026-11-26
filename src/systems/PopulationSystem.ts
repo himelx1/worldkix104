@@ -1,5 +1,6 @@
-import { BUILDINGS, getBuildingLevelMultiplier } from '../data/buildings.data';
+import { BUILDINGS } from '../data/buildings.data';
 import type { HappinessDriver, HappinessReport, WorldEngineState } from '../core/GameState';
+import { getBuildingStatsAtLevel } from './BuildingSimulation';
 import { ResourceSystem } from './ResourceSystem';
 import { CitizenAccounting } from './CitizenAccounting';
 import { DistrictServiceSystem } from './DistrictServiceSystem';
@@ -19,8 +20,9 @@ export class PopulationSystem {
       if (b.status === 'constructing') continue;
       const def = BUILDINGS[b.defId];
       if (!def) continue;
-      if ((b.status === 'active' || def.minWorkers === 0) && def.happinessBonus) {
-        flatHappiness += def.happinessBonus;
+      const stats = getBuildingStatsAtLevel(def, b.level);
+      if ((b.status === 'active' || def.minWorkers === 0) && stats.happinessBonus) {
+        flatHappiness += stats.happinessBonus;
       }
     }
 
@@ -187,30 +189,30 @@ export class PopulationSystem {
       if (b.status === 'constructing') continue;
       const def = BUILDINGS[b.defId];
       if (!def) continue;
-      const levelScale = getBuildingLevelMultiplier(b.level, def);
+      const stats = getBuildingStatsAtLevel(def, b.level);
       if (b.defId === 'immigration_office' && b.status === 'active') hasImmigrationOffice = true;
-      if (def.lifeExpectancyBonus && b.status === 'active') {
-        lifeExpBuildings += def.lifeExpectancyBonus * Math.min(2.0, 1 + (b.level - 1) * 0.25);
+      if (stats.lifeExpectancyBonus && b.status === 'active') {
+        lifeExpBuildings += stats.lifeExpectancyBonus;
       }
 
-      if (def.housingCapacity) {
-        housingCap += Math.round(def.housingCapacity * levelScale);
+      if (stats.housingCapacity > 0) {
+        housingCap += stats.housingCapacity;
       }
-      if (def.waterOutput && b.enabled) {
-        waterOut += Math.round(def.waterOutput * levelScale);
+      if (stats.waterOutput > 0 && b.enabled) {
+        waterOut += stats.waterOutput;
       }
-      if (def.waterDemand) {
-        waterDemand += Math.round(def.waterDemand * weatherWaterMult);
+      if (stats.waterDemand > 0 && b.enabled) {
+        waterDemand += Math.round(stats.waterDemand * weatherWaterMult);
       }
       if (b.status === 'active' || def.minWorkers === 0) {
-        if (def.healthcareBonus) healthCap += Math.round(def.healthcareBonus * levelScale);
-        if (def.educationBonus) {
+        if (stats.healthcareBonus > 0) healthCap += stats.healthcareBonus;
+        if (stats.educationBonus > 0) {
           const cov = DistrictServiceSystem.getBuildingCoverage(b, state);
-          eduCap += Math.round(def.educationBonus * levelScale * cov.educationBonusMult);
+          eduCap += Math.round(stats.educationBonus * cov.educationBonusMult);
         }
-        if (def.safetyBonus) safetyCap += Math.round(def.safetyBonus * levelScale);
-        if (def.recreationBonus) recCap += Math.round(def.recreationBonus * levelScale);
-        if (def.happinessBonus) flatHappiness += def.happinessBonus;
+        if (stats.safetyBonus > 0) safetyCap += stats.safetyBonus;
+        if (stats.recreationBonus > 0) recCap += stats.recreationBonus;
+        if (stats.happinessBonus > 0) flatHappiness += stats.happinessBonus;
       }
     }
 

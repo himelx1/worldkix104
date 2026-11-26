@@ -1,4 +1,4 @@
-import { BUILDINGS, BuildingCategory, getBuildingLevelMultiplier } from '../data/buildings.data';
+import { BUILDINGS, BuildingCategory, getBuildingFootprint } from '../data/buildings.data';
 import { POLICY_MAP } from '../data/policies.data';
 import { RESOURCES, ResourceId } from '../data/resources.data';
 import { FeatureType, TREE_SPECIES } from '../data/trees.data';
@@ -17,6 +17,11 @@ import {
   ZONE_TYPE_TO_ID,
 } from './GameState';
 import { gridToChunk, tileKey } from './IsoMath';
+import {
+  clampBuildingLevel,
+  getBuildingStatsAtLevel,
+  getEffectiveMaxLevel,
+} from '../systems/BuildingSimulation';
 import { BuildingSystem } from '../systems/BuildingSystem';
 import { CitizenAccounting } from '../systems/CitizenAccounting';
 import { EconomySystem } from '../systems/EconomySystem';
@@ -34,6 +39,7 @@ import { DistrictServiceSystem } from '../systems/DistrictServiceSystem';
 import { PathfindingSystem } from '../systems/PathfindingSystem';
 import { LogisticsAndTransportSystem } from '../systems/LogisticsAndTransportSystem';
 import { NetworkDiagnosticsSystem, type NetworkDiagnosticsReport } from '../systems/NetworkDiagnosticsSystem';
+import { TreeGrowthSystem } from '../systems/TreeGrowthSystem';
 import { TreePlantationSystem } from '../systems/TreePlantationSystem';
 
 export type EngineEvent =
@@ -148,6 +154,7 @@ export class CoreEngine {
       showZoneBorders: false,
       landModeActive: false,
       treePlantations: {},
+      growingTrees: [],
       corporateStats: [],
       season: 'spring',
       dayInSeason: 1,
@@ -286,6 +293,7 @@ export class CoreEngine {
     savedState.powerDelivered ??= savedState.powerGenerated ?? 0;
     savedState.waterDelivered ??= savedState.waterGenerated ?? 0;
     savedState.treePlantations ??= {};
+    savedState.growingTrees ??= [];
     savedState.population.ageBreakdown ??= { child: 0, underage: 0, adult: 0, elderly: 0 };
     savedState.population.cohorts ??= [];
     savedState.settings.crowdDensity ??= 'auto';
@@ -310,10 +318,55 @@ export class CoreEngine {
       serviceCoveragePct: 0,
     };
 
+    // Enforce unique monotonic building IDs and canonical maxLevels on load
+    const seenIds = new Set<number>();
+    let maxExistingId = 0;
+    for (const b of savedState.buildings) {
+      if (typeof b.id === 'number' && b.id > maxExistingId) maxExistingId = Math.floor(b.id);
+    }
+    let nextIdCursor = Math.max(
+      typeof savedState.nextBuildingId === 'number' && savedState.nextBuildingId > 0
+        ? Math.floor(savedState.nextBuildingId)
+        : 1,
+      maxExistingId + 1
+    );
+    const idFixedBuildings: typeof savedState.buildings = [];
+    for (const b of savedState.buildings) {
+      const def = BUILDINGS[b.defId];
+      if (!def) continue;
+      let bid = typeof b.id === 'number' && b.id > 0 ? Math.floor(b.id) : 0;
+      if (bid <= 0 || seenIds.has(bid)) {
+        bid = nextIdCursor++;
+      }
+      seenIds.add(bid);
+      if (bid >= nextIdCursor) nextIdCursor = bid + 1;
+      b.id = bid;
+      b.level = clampBuildingLevel(def, b.level);
+      idFixedBuildings.push(b);
+    }
+    savedState.buildings = idFixedBuildings;
+    savedState.nextBuildingId = nextIdCursor;
+
     this.state = savedState;
     this.chunks = new ChunkManager(savedState.worldSeed);
     this.chunks.setTick(savedState.tick);
     this.chunks.loadPersistedChunks(persistedChunks);
+
+    // Ensure chunk buildingRef agrees with deduplicated building IDs
+    for (const b of this.state.buildings) {
+      const def = BUILDINGS[b.defId];
+      if (!def) continue;
+      const fp = getBuildingFootprint(def, b.rotation ?? 0);
+      for (let dx = 0; dx < fp.width; dx++) {
+        for (let dy = 0; dy < fp.height; dy++) {
+          const { cx, cy, index } = gridToChunk(b.gx + dx, b.gy + dy);
+          const chunk = this.chunks.getOrCreateChunk(cx, cy);
+          chunk.buildingRef[index] = b.id;
+        }
+      }
+    }
+    TreeGrowthSystem.backfillFromLoadedChunks(this.state, this.chunks);
+
     this.syncCityTileCounts();
     this.roadNet.markDirty();
     this.roadNet.recomputeIfDirty(this.chunks, this.state);
@@ -360,7 +413,7 @@ export class CoreEngine {
       if (!def?.recipe) continue;
       // Conservative offline catch-up grants raw & agricultural yields without depleting mines or negative chains
       if (Object.keys(def.recipe.inputs).length > 0 || def.requiredDeposit) continue;
-      const mult = getBuildingLevelMultiplier(b.level, def);
+      const mult = getBuildingStatsAtLevel(def, b.level).multiplier;
       const cycles = (effectiveMin * 60) / Math.max(1, def.recipe.cycleSeconds);
       for (const [k, amt] of Object.entries(def.recipe.outputs)) {
         if (!amt) continue;
@@ -581,6 +634,7 @@ export class CoreEngine {
       climate
     );
 
+    TreeGrowthSystem.tick(this.state, this.chunks, climate);
     EnvironmentSystem.tickEnvironment(this.state, this.chunks, techMods.pollutionReduction);
     EconomySystem.tickEconomy(this.state);
 
@@ -629,8 +683,8 @@ export class CoreEngine {
       }
 
       case 'REPLANT_TILE': {
-        const ok = BuildingSystem.replantTile(cmd.gx, cmd.gy, this.chunks);
-        if (!ok) return { ok: false, reason: 'Cannot plant sapling here' };
+        const ok = BuildingSystem.replantTile(cmd.gx, cmd.gy, this.chunks, this.state);
+        if (!ok) return { ok: false, reason: 'Cannot plant sapling on unlocked land here' };
         this.emit({ type: 'STATE_CHANGED' });
         return { ok: true };
       }
@@ -736,7 +790,8 @@ export class CoreEngine {
           this.state,
           this.chunks,
           this.roadNet,
-          cmd.rotation ?? 0
+          cmd.rotation ?? 0,
+          cmd.targetLevel
         );
         if (!res.ok || !res.building) return { ok: false, reason: res.reason };
         UtilityNetworkSystem.markDirty();
@@ -837,8 +892,16 @@ export class CoreEngine {
       case 'UPGRADE_BUILDING': {
         const res = this.buildingSys.upgradeBuilding(cmd.buildingId, this.state);
         if (!res.ok) return { ok: false, reason: res.reason };
+        const upgB = this.state.buildings.find((item) => item.id === cmd.buildingId);
+        if (upgB && BUILDINGS[upgB.defId]?.isAutomatedTreePlantation) {
+          TreePlantationSystem.ensurePlantationState(upgB, this.state);
+        }
         UtilityNetworkSystem.markDirty();
         this.roadNet.invalidateBuildingBoostCache();
+        this.workforce.assignWorkers(
+          this.state,
+          TechSystem.getAggregatedModifiers(this.state).workerNeedReduction
+        );
         this.state.xp += res.xpGained;
         this.progression.tickProgression(this.state, (lvl, rew) => {
           this.emit({ type: 'LEVEL_UP', level: lvl, rewardCoins: rew });
@@ -851,9 +914,10 @@ export class CoreEngine {
         const def = BUILDINGS[cmd.defId];
         if (!def) return { ok: false, reason: 'Unknown building' };
         this.state.unlockedBuildingLevels ??= {};
-        const curLevel = Math.max(1, this.state.unlockedBuildingLevels[cmd.defId] ?? 1);
-        if (curLevel >= def.maxLevel) {
-          return { ok: false, reason: `${def.name} blueprint is already max Lv.${def.maxLevel}` };
+        const maxLvl = getEffectiveMaxLevel(def);
+        const curLevel = Math.min(maxLvl, Math.max(1, this.state.unlockedBuildingLevels[cmd.defId] ?? 1));
+        if (curLevel >= maxLvl) {
+          return { ok: false, reason: `${def.name} blueprint is already max Lv.${maxLvl}` };
         }
         const cost = Math.max(100, Math.round(def.coinCost * 1.25 * curLevel));
         if (this.state.coins < cost) {
@@ -1251,6 +1315,9 @@ export class CoreEngine {
           } else {
             return { ok: false, reason: pre.reason, needsConfirm: pre.needsConfirm };
           }
+        }
+        if (cmd.action === 'to_water') {
+          TreeGrowthSystem.removeAt(this.state, cmd.gx, cmd.gy);
         }
         this.state.coins -= cost;
         this.state.xp += 15;
